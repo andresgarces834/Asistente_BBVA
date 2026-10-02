@@ -4,19 +4,21 @@ Las URLs se obtienen desde el sitemap.xml. Cada página se guarda como
 un archivo HTML independiente y se genera un manifest.jsonl que relaciona
 cada archivo con su URL original.
 
+Varias pestañas descargan en paralelo (--workers) compartiendo una cola.
+
 El scraper puede reanudarse: las URLs cuyo archivo ya existe se omiten.
 No se realiza limpieza ni transformación del HTML.
 """
 
 import argparse
+import asyncio
 import hashlib
 import json
-import time
 from pathlib import Path
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
 BASE_URL = "https://www.bbva.com.co"
 SITEMAP_URL = f"{BASE_URL}/sitemap.xml"
@@ -29,7 +31,8 @@ EXCLUDED_PATTERNS = (
     "/personas/cards",
 )
 
-RATE_LIMIT_SECONDS = 1
+WORKERS = 10
+RATE_LIMIT_SECONDS = 1  # pausa de cada worker entre páginas
 TIMEOUT_MS = 45_000
 
 ########################################################################
@@ -68,15 +71,82 @@ def save_html(url: str, html: str) -> str:
     return filename
 
 ########################################################################
+##########################  WORKER - SCRAPER  ##########################
+########################################################################
+
+async def worker(queue: asyncio.Queue, context, manifest, total: int, counter: list[int]) -> None:
+    """Toma URLs de la cola y las descarga en su propia pestaña"""
+
+    page = await context.new_page()
+
+    while True:
+        try:
+            url = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+        if page.is_closed():
+            print("El navegador se cerró. Deteniendo worker.")
+            break
+
+        try:
+            response = await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=TIMEOUT_MS,
+            )
+
+            if response is None or not response.ok:
+                status = response.status if response else "sin respuesta"
+                raise RuntimeError(f"HTTP {status}")
+
+            # Guardamos el HTML renderizado sin limpiarlo
+            # ni transformarlo.
+            html = await page.content()
+
+            filename = save_html(url, html)
+
+            # No hay await entre escribir y hacer flush, así que las
+            # líneas de distintos workers nunca se mezclan.
+            manifest.write(
+                json.dumps(
+                    {
+                        "url": url,
+                        "archivo": filename,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            manifest.flush()
+
+            counter[0] += 1
+            print(f"[{counter[0]}/{total}] OK {url}")
+
+        except Exception as exc:
+            counter[0] += 1
+            print(f"[{counter[0]}/{total}] ERROR {url}: {exc}")
+
+        await asyncio.sleep(RATE_LIMIT_SECONDS)
+
+    await page.close()
+
+########################################################################
 ###########################  MAIN - SCRAPER  ###########################
 ########################################################################
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--limit",
         type=int,
         help="Maximo de paginas a descargar.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=WORKERS,
+        help="Pestañas descargando en paralelo.",
     )
     parser.add_argument(
         "--headless",
@@ -87,31 +157,31 @@ def main() -> None:
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
             channel="chrome",
             headless=args.headless,
         )
-        context = browser.new_context(locale="es-CO")
-        page = context.new_page()
+        context = await browser.new_context(locale="es-CO")
+        page = await context.new_page()
 
         try:
             # Inicializamos el sitio antes de solicitar el sitemap para
             # conservar el mismo contexto de navegador.
-            page.goto(
+            await page.goto(
                 BASE_URL,
                 wait_until="domcontentloaded",
                 timeout=TIMEOUT_MS,
             )
 
-            response = context.request.get(SITEMAP_URL)
+            response = await context.request.get(SITEMAP_URL)
 
             if not response.ok:
                 raise RuntimeError(
                     f"Sitemap: HTTP {response.status}"
                 )
 
-            urls = parse_sitemap(response.text())
+            urls = parse_sitemap(await response.text())
 
             # Solo procesamos URLs del dominio objetivo y aplicamos
             # las exclusiones definidas para este dataset.
@@ -139,59 +209,25 @@ def main() -> None:
             if args.limit:
                 urls = urls[:args.limit]
 
-            print(f"URLs por descargar: {len(urls)}")
+            print(f"URLs por descargar: {len(urls)} ({args.workers} workers)")
 
+            queue = asyncio.Queue()
+            for url in urls:
+                queue.put_nowait(url)
+
+            await page.close()
+
+            counter = [0]
             with MANIFEST_PATH.open("a", encoding="utf-8") as manifest:
-                for index, url in enumerate(urls, 1):
-                    if page.is_closed():
-                        print("El navegador se cerró. Deteniendo scraper.")
-                        break
-
-                    try:
-                        response = page.goto(
-                            url,
-                            wait_until="domcontentloaded",
-                            timeout=TIMEOUT_MS,
-                        )
-
-                        if response is None or not response.ok:
-                            status = response.status if response else "sin respuesta"
-                            raise RuntimeError(f"HTTP {status}")
-
-                        # Guardamos el HTML renderizado sin limpiarlo
-                        # ni transformarlo.
-                        html = page.content()
-
-                        filename = save_html(url, html)
-
-                        manifest.write(
-                            json.dumps(
-                                {
-                                    "url": url,
-                                    "archivo": filename,
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n"
-                        )
-                        manifest.flush()
-
-                        print(
-                            f"[{index}/{len(urls)}] OK {url}"
-                        )
-
-                    except Exception as exc:
-                        print(
-                            f"[{index}/{len(urls)}] "
-                            f"ERROR {url}: {exc}"
-                        )
-
-                    time.sleep(RATE_LIMIT_SECONDS)
+                await asyncio.gather(*(
+                    worker(queue, context, manifest, len(urls), counter)
+                    for _ in range(args.workers)
+                ))
 
         finally:
-            context.close()
-            browser.close()
+            await context.close()
+            await browser.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
