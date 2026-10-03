@@ -345,21 +345,23 @@ encabezados salen 15.121 secciones, con una mediana de solo 182 caracteres:
 - **`headings` (por defecto, híbrida):** una sección de tamaño normal es un chunk;
   las secciones muy cortas (menos de 300 caracteres) se unen a la siguiente; una
   que no cabe en 1.000 caracteres se parte con solape, intentando cortar en un
-  salto de párrafo o de línea y no a mitad de palabra.
+  salto de párrafo o de línea y no a mitad de palabra. **Cada trozo de una sección
+  partida repite el título de la sección**, y el corte prefiere caer justo antes
+  de una etiqueta de grupo (ver [Corrección posterior](#corrección-posterior-trozos-de-continuación-sin-encabezado)).
 - **`fija` (línea base):** ventana de 1.000 caracteres sobre todo el texto, sin
   mirar los encabezados.
 
-### Resultado (1.200 páginas)
+### Resultado (1.201 páginas)
 
 | | `headings` | `fija` |
 |---|---|---|
-| Chunks finales (tras deduplicar) | **7.659** | 6.229 |
-| Tamaño mediano | 571 caracteres | 936 |
-| Chunks que empiezan con un encabezado | 72 % | 19 % |
+| Chunks finales (tras deduplicar) | **7.493** | 5.909 |
+| Tamaño mediano | 595 caracteres | 932 |
+| Chunks que empiezan con un encabezado | 99 % | 34 % |
 
 Se eligió `headings` porque sus chunks corresponden a secciones reales de la
 página (con su título), lo que da fragmentos más coherentes al recuperar. En la
-práctica genera 10.149 chunks: descarta 595 de menos de 80 caracteres y 1.895
+práctica genera 9.547 chunks: descarta 332 de menos de 80 caracteres y 1.722
 repetidos.
 
 ### Deduplicación
@@ -368,6 +370,48 @@ Cada chunk se identifica por una huella del texto (ignorando mayúsculas y
 espacios). Si el mismo texto aparece en otra página, se conserva solo la primera
 copia y se suma `repeticiones`. El caso más repetido, un bloque de FAQs de
 tarjetas, aparecía 238 veces.
+
+### Corrección posterior: trozos de continuación sin encabezado
+
+La misma prueba con *"¿Qué puedo hacer en mi línea empresarial?"* destapó un
+defecto del chunking. La página tiene una lista de 24 viñetas bajo ese título; como
+la sección mide 1.788 caracteres y un chunk admite 1.000, se partió en dos, y el
+segundo (las últimas 10 viñetas) quedó **sin el título**. Sin él, su embedding se parecía poco a la pregunta
+(similitud 0,843 frente a un corte de 0,862 para entrar en el top 5), no se
+recuperó, y el asistente contestó solo con las primeras 14 viñetas.
+
+No era un caso aislado: 1.100 secciones se parten y **2.315 de los 10.149 chunks
+(23 %)** eran trozos de continuación sin título.
+
+**Qué se cambió**
+
+- **Cada trozo de una sección partida repite el título de la sección.** Con él, el
+  trozo del ejemplo sube de 0,843 a 0,881 de similitud (medido antes de reindexar).
+- **La introducción corta que precede a una sección larga se parte con ella,** en
+  lugar de quedar como un chunk casi vacío que ocupa un puesto de la búsqueda (un
+  chunk de 91 caracteres con solo el título de la página era el primer resultado).
+- **El solape arranca en un límite de párrafo** y no a mitad de una viñeta.
+- **El corte prefiere caer justo antes de una etiqueta de grupo** (`**Leasing**`,
+  de las pestañas reconstruidas en la limpieza). En una primera versión el corte
+  cayó dentro del grupo "Comercio exterior": su etiqueta y la primera viñeta
+  quedaron en un chunk y las otras tres en el siguiente, sin etiqueta, y el modelo
+  no supo a qué línea pertenecían. Ahora cada grupo viaja entero con su etiqueta.
+- **No se repite un título idéntico** cuando una página lo escribe dos veces
+  seguidas (51 chunks ya lo tenían; la primera versión del cambio lo subió a 245).
+
+**Resultado**
+
+| | Antes | Después |
+|---|---|---|
+| Chunks que empiezan con un título | 72 % | 99 % |
+| Chunks de menos de 150 caracteres | 72 | 51 |
+| Líneas del texto limpio ausentes de los chunks de su página (sin deduplicar) | 0,78 % | 0,72 % |
+| "¿Qué puedo hacer en mi línea empresarial?": viñetas de la página en la respuesta | 14 de 24 | **24 de 24** |
+| Preguntas de prueba (9, con respuesta verificable) | 8 de 9 | 8 de 9 |
+
+La fila de la pregunta de prueba mide una sola pregunta, y las 9 preguntas de la
+última fila las escribió el autor: son una comprobación de que no hubo retrocesos,
+no una evaluación formal.
 
 ### Salida
 
@@ -429,7 +473,7 @@ de página (`### Requisitos`) no dice de qué producto habla por sí solo.
 
 ### Resultado
 
-7.659 chunks indexados en unos 5 minutos en CPU.
+7.493 chunks indexados en unos 5 minutos en CPU.
 
 ## Patrones de diseño
 
@@ -518,6 +562,12 @@ La interfaz está pendiente de definir.
   sueltos; puede caer algún texto corto real.
 - **El tamaño de chunk se mide en caracteres, no en tokens.** Es una aproximación
   que se afinará al definir el prompt.
+- **Cada trozo repite solo el título de su propia sección,** no la ruta completa de
+  títulos superiores. Los títulos de esta web no siguen una jerarquía regular, así
+  que no se intentó reconstruirla.
+- **Una respuesta que abarca varios chunks depende de que todos entren en el top 5.**
+  La lista de líneas empresariales ya entra completa (ocupa 3 chunks), pero una
+  lista más larga podría volver a quedar incompleta.
 - **La limpieza descarta páginas con menos de 200 caracteres.** Entre ellas
   algunos artículos de blog muy cortos quedan fuera.
 - **Las listas pueden contener títulos.** Algunos elementos `<li>` son en realidad
@@ -545,6 +595,8 @@ La interfaz está pendiente de definir.
 - Detectar bloques casi duplicados (no solo idénticos) y conservar todas las URLs
   donde aparece cada chunk.
 - Medir el tamaño de los chunks en tokens con el tokenizador del modelo de embeddings.
+- Traer, junto a cada resultado, los chunks vecinos de su misma página, para que una
+  lista o un procedimiento partido no llegue incompleto.
 - Reranker sobre los resultados recuperados (también ayudaría a detectar preguntas
   sin respuesta en el sitio) - agregar.
 - Evaluación formal de la recuperación con un conjunto de preguntas y respuestas

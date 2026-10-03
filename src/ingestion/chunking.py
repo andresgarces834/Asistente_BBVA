@@ -43,8 +43,10 @@ def cortar(texto: str, size: int, overlap: int) -> list[str]:
     """Parte un texto en trozos de hasta `size` caracteres, con solape.
 
     Intenta cortar en un salto de párrafo, de línea o en un espacio, para no
-    partir frases ni palabras por la mitad.
+    partir frases ni palabras por la mitad. El solape también empieza, si puede,
+    en un límite de párrafo: así un trozo no arranca a mitad de una viñeta.
     """
+    overlap = min(overlap, size // 4)  # un solape grande impediría avanzar
     trozos = []
     inicio = 0
     n = len(texto)
@@ -52,12 +54,17 @@ def cortar(texto: str, size: int, overlap: int) -> list[str]:
     while inicio < n:
         fin = min(inicio + size, n)
 
+        limite_de_grupo = False
         if fin < n:
-            # Mejor punto de corte dentro de la segunda mitad de la ventana.
-            for separador in ("\n\n", "\n", " "):
+            # Mejor punto de corte dentro de la segunda mitad de la ventana. El
+            # preferido es justo antes de una etiqueta de grupo (**Leasing**, de las
+            # pestañas): si el corte cae dentro de un grupo, las viñetas que pasan al
+            # trozo siguiente se quedan sin la etiqueta que dice a qué pertenecen.
+            for separador in ("\n\n**", "\n\n", "\n", " "):
                 corte = texto.rfind(separador, inicio + size // 2, fin)
                 if corte != -1:
-                    fin = corte + len(separador)
+                    limite_de_grupo = separador == "\n\n**"
+                    fin = corte + (2 if limite_de_grupo else len(separador))
                     break
 
         trozo = texto[inicio:fin].strip()
@@ -67,14 +74,27 @@ def cortar(texto: str, size: int, overlap: int) -> list[str]:
         if fin >= n:
             break
 
+        if limite_de_grupo:
+            inicio = fin  # el trozo siguiente arranca en la etiqueta: sin solape
+            continue
+
         inicio = fin - overlap
-        # No empezar a mitad de palabra.
-        if inicio > 0 and not texto[inicio - 1].isspace():
+        parrafo = texto.find("\n\n", inicio, fin)
+        if parrafo != -1:
+            inicio = parrafo + 2
+        elif inicio > 0 and not texto[inicio - 1].isspace():
+            # Sin límite de párrafo: al menos no empezar a mitad de palabra.
             espacio = texto.find(" ", inicio, inicio + 30)
             if espacio != -1:
                 inicio = espacio + 1
 
     return trozos
+
+def encabezado_de(seccion: str) -> str:
+    """Primera línea de la sección si es un título markdown; si no, vacío"""
+
+    primera = seccion.split("\n", 1)[0]
+    return primera if re.match(r"#{1,6} ", primera) else ""
 
 ########################################################################
 #################  STRATEGY: ESTRATEGIAS DE CHUNKING  ##################
@@ -103,7 +123,12 @@ class HeadingChunker(Chunker):
 
     - Una sección de tamaño normal es un chunk por sí sola.
     - Las secciones muy cortas (un encabezado casi solo) se unen a la siguiente.
-    - Una sección que no cabe en `size` se parte con `cortar`.
+    - Una sección que no cabe en `size` se parte con `cortar`, y cada trozo
+      repite el título de la sección. Sin él, un trozo de continuación no dice de
+      qué trata y la búsqueda no lo encuentra (los chunks de una lista larga se
+      quedaban sin el título que los relaciona con la pregunta).
+    - Si una sección larga viene precedida de una introducción corta, se parten
+      juntas, para que esa introducción no quede como un chunk casi vacío.
     """
 
     def dividir(self, pagina: dict) -> list[str]:
@@ -117,25 +142,54 @@ class HeadingChunker(Chunker):
                 chunks.append(buffer)
                 buffer = ""
 
-            if len(buffer) + len(seccion) + 2 <= self.size:
-                buffer = f"{buffer}\n\n{seccion}" if buffer else seccion
+            union = self._unir(buffer, seccion)
+            if len(union) <= self.size:
+                buffer = union
                 continue
 
-            # No cabe: se cierra lo acumulado y se parte la sección grande.
-            if buffer:
-                chunks.append(buffer)
-                buffer = ""
             if len(seccion) <= self.size:
+                # No cabe con lo acumulado, pero sí sola: se cierra lo acumulado.
+                if buffer:
+                    chunks.append(buffer)
                 buffer = seccion
-            else:
-                *completos, resto = cortar(seccion, self.size, self.overlap)
-                chunks.extend(completos)
-                buffer = resto
+                continue
+
+            # La sección es más larga que un chunk y hay que partirla de todos modos:
+            # lo acumulado (corto) se une a ella en lugar de quedar aparte.
+            *completos, resto = self._partir(union, encabezado_de(seccion))
+            chunks.extend(completos)
+            buffer = resto
 
         if buffer:
             chunks.append(buffer)
 
         return chunks
+
+    @staticmethod
+    def _unir(buffer: str, seccion: str) -> str:
+        """Une lo acumulado con la sección, sin repetir un título idéntico.
+
+        Hay páginas que repiten su título dos veces seguidas (un título suelto y,
+        justo después, la sección con el mismo título).
+        """
+
+        if not buffer or buffer == encabezado_de(seccion):
+            return seccion
+        return f"{buffer}\n\n{seccion}"
+
+    def _partir(self, texto: str, encabezado: str) -> list[str]:
+        """Parte el texto y antepone `encabezado` a los trozos que no lo traen"""
+
+        if not encabezado:
+            return cortar(texto, self.size, self.overlap)
+
+        encabezado = encabezado[: self.size // 3]  # un título larguísimo no debe comerse el chunk
+        piezas = cortar(texto, self.size - len(encabezado) - 2, self.overlap)
+
+        return [piezas[0]] + [
+            pieza if pieza.startswith(encabezado) else f"{encabezado}\n\n{pieza}"
+            for pieza in piezas[1:]
+        ]
 
 ESTRATEGIAS = {
     "headings": HeadingChunker,
