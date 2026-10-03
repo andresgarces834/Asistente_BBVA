@@ -12,11 +12,12 @@ público de BBVA Colombia (<https://www.bbva.com.co/>) usando RAG. Prueba técni
 | 1. Scraping: descarga del HTML crudo | Hecho |
 | 2. Limpieza y normalización del HTML | Hecho |
 | 3. Chunking | Hecho |
-| 4. Vectorización e indexación | Siguiente |
-| 5. Interfaz conversacional | Pendiente |
-| 6. Historial de conversación por ID | Pendiente |
-| 7. Análisis del historial (métricas) | Pendiente |
-| 8. Dockerización | Pendiente |
+| 4. Vectorización e indexación | Hecho |
+| 5. Recuperación y generación (LLM) | Siguiente |
+| 6. Interfaz conversacional | Pendiente |
+| 7. Historial de conversación por ID | Pendiente |
+| 8. Análisis del historial (métricas) | Pendiente |
+| 9. Dockerización | Pendiente |
 
 ## Flujo de datos
 
@@ -31,7 +32,10 @@ sitemap.xml ---> [1. SCRAPER] ---> data/raw/*.html + manifest.jsonl
                                    [3. CHUNKING] ---> data/clean/chunks.jsonl
                                           |
                                           v
-                          [4. EMBEDDINGS + BASE VECTORIAL]   (siguiente)
+                          [4. EMBEDDINGS + BASE VECTORIAL] ---> data/chroma/
+                                          |
+                                          v
+                          [5. RAG: recuperación + LLM local]   (siguiente)
 ```
 
 Las etapas están separadas a propósito: el scraper solo descarga y guarda HTML
@@ -43,15 +47,22 @@ Así se puede corregir o cambiar la limpieza sin volver a scrapear el sitio.
 ```
 Asistente_BBVA/
 ├── data/
-│   ├── raw/                   # HTML crudo + manifest.jsonl (NO se versiona)
-│   └── clean/                 # paginas, descartadas y chunks (.jsonl, sí se versiona)
+│   ├── raw/                   # HTML crudo + manifest.jsonl 
+│   ├── clean/                 # paginas, descartadas y chunks (.jsonl, sí se versiona)
+│   └── chroma/                # base vectorial local 
 ├── src/
+│   ├── config.py              # configuración desde .env              (done)
 │   ├── scraping/
 │   │   └── scraper.py         # descarga paralela del HTML crudo      (done)
 │   ├── ingestion/
 │   │   └── limpieza.py        # HTML crudo -> texto limpio            (done)
-│   │   └── chunking.py        # páginas -> chunks (Strategy)          (done)
-│   ├── providers/             # embeddings, vector store, LLM         (pendiente)
+│   │   ├── chunking.py        # páginas -> chunks (Strategy)          (done)
+│   │   └── indexador.py       # chunks -> embeddings -> Chroma        (done)
+│   ├── providers/
+│   │   ├── base.py            # interfaces Embeddings / VectorStore   (done)
+│   │   ├── local.py           # e5 + Chroma                           (done)
+│   │   └── factory.py         # Factory de proveedores                (done)
+│   │                          # LLM (Ollama)                          (pendiente)
 │   ├── rag/                   # recuperación y generación             (pendiente)
 │   ├── memory/                # historial de conversaciones           (pendiente)
 │   ├── analytics/             # métricas sobre el historial           (pendiente)
@@ -61,15 +72,18 @@ Asistente_BBVA/
 
 ## Requisitos previos
 
-Para las etapas implementadas (scraping, limpieza y chunking):
+Para las etapas implementadas (scraping, limpieza, chunking e indexación):
 
 - Python 3.13.5.
 - **Google Chrome instalado**, pero solo si se va a ejecutar el scraper (paso 3,
   opcional). Se lanza con `channel="chrome"`.
 - Conexión a internet para el scraper.
 
-Todavía no hay Docker. Las variables de entorno (`.env`) tampoco son necesarias
-aún.
+- Unos 2 GB libres en disco: el entorno virtual con PyTorch ocupa ~1,5 GB y la
+  primera ejecución descarga el modelo de embeddings (~470 MB).
+
+Todavía no hay Docker. Las variables de entorno son opcionales: todo tiene un valor
+por defecto y `.env.example` lista los parámetros (cópialo a `.env` para cambiarlos).
 
 ## Instrucciones paso a paso
 
@@ -150,7 +164,22 @@ Lee `data/clean/paginas.jsonl` y genera `data/clean/chunks.jsonl`.
 | `--min-chars N` | Una sección más corta se une a la siguiente | 300 |
 | `--salida RUTA` | Archivo de salida | `data/clean/chunks.jsonl` |
 
-### 6. Cómo usar la interfaz conversacional
+### 6. Indexar en la base vectorial
+
+```bash
+python -m src.ingestion.indexador
+```
+
+Calcula los embeddings de `data/clean/chunks.jsonl` y los guarda en Chroma
+(`data/chroma/`). La primera vez descarga el modelo. Con los 7.659 chunks tarda
+unos 5 minutos en CPU. Es reanudable: omite los chunks ya indexados.
+
+| Argumento | Descripción |
+|---|---|
+| `--limit N` | Indexa solo los N primeros chunks (prueba rápida) |
+| `--reiniciar` | Borra lo indexado y empieza de cero |
+
+### 7. Cómo usar la interfaz conversacional
 
 *Pendiente.* 
 
@@ -328,12 +357,55 @@ Cada línea de `chunks.jsonl`:
 `orden` es la posición del chunk dentro de su página. El `titulo` se guarda aparte
 para poder anteponerlo al texto cuando se calculen los embeddings.
 
+## Etapa 4 — Vectorización e indexación (implementada)
+
+`src/ingestion/indexador.py`. Entrada: `data/clean/chunks.jsonl`. Salida: la
+colección `bbva` en Chroma (`data/chroma/`, ~54 MB).
+
+### Qué hace
+
+1. Pide a la fábrica de proveedores un generador de embeddings y una base 
+   vectorial, el indexador no conoce las tecnologías concretas.
+2. Descarta los chunks que ya están indexados, así que se puede
+   interrumpir y reanudar.
+3. Por cada lote de 128 chunks, calcula el embedding de `titulo + texto` y lo guarda
+   con sus metadatos (`url`, `titulo`, `seccion`, `categoria`, `subcategoria`,
+   `orden`, `repeticiones`), que permiten filtrar al recuperar.
+
+El **título** de la página se antepone al texto al vectorizar: un chunk de mitad
+de página (`### Requisitos`) no dice de qué producto habla por sí solo.
+
+### Decisiones
+
+- **`multilingual-e5-small`.** El contenido está en español; admite 512 tokens, que
+  caben los chunks de ~1.000 caracteres (el MiniLM multilingüe solo admite 128 y
+  los cortaría). Es gratuito y pequeño.
+- **Prefijos `passage:` y `query:`.** e5 los exige para documentos y preguntas
+  respectivamente; sin ellos la calidad baja. Están dentro de la clase.
+- **Embeddings en CPU,** a propósito: la VRAM de la GPU (6 GB) se reserva para el LLM.
+- **Distancia coseno** con vectores normalizados.
+- **Chroma como base vectorial:**
+  - Código abierto y sin costo.
+  - El mismo código corre embebida (desarrollo) o como servidor (Docker); solo
+    cambia `CHROMA_HOST`.
+  - Guarda metadatos y filtra por ellos, algo que se aprovecha desde la limpieza
+    (`seccion`, `categoria`, ...).
+  - Es proporcionada al volumen (~7.700 vectores).
+  - *Descartadas:* **Qdrant** (más robusta, pero más compleja de lo que este
+    volumen necesita, sería la candidata si el sistema crece), **FAISS** (es una
+    librería de búsqueda, no una base de datos) y **pgvector** (obliga a mantener
+    un PostgreSQL solo para esto).
+
+### Resultado
+
+7.659 chunks indexados en unos 5 minutos en CPU.
+
 ## Patrones de diseño
 
 | Patrón | Tipo | Dónde | Estado |
 |---|---|---|---|
 | **Strategy** | Comportamental | `src/ingestion/chunking.py` | Hecho |
-| **Factory** | Creacional | Proveedores (embeddings, base vectorial, LLM) | Pendiente |
+| **Factory** | Creacional | `src/providers/factory.py` | Hecho (falta el LLM) |
 
 ### Strategy: estrategias de chunking
 
@@ -346,6 +418,20 @@ para poder anteponerlo al texto cuando se calculen los embeddings.
 - **Alternativa descartada:** un `if` dentro de una sola función. Funcionaría,
   pero mezclaría ambos algoritmos y obligaría a modificarla cada vez que se
   añada otra estrategia.
+
+### Factory: proveedores
+
+- **Qué es:** `FabricaProveedores` es una clase abstracta que define *qué* se crea
+  (`crear_embeddings`, `crear_vector_store`). `FabricaLocal` define *cómo*:
+  `E5Embeddings` y `ChromaVectorStore`. `obtener_fabrica(config)` elige la
+  familia según `PERFIL`.
+- **Por qué aquí:** el indexador (y, más adelante, el RAG) solo trabaja contra las
+  interfaces de `providers/base.py`. Cambiar de proveedor es escribir otra fábrica y
+  añadirla a `FABRICAS`, sin tocar el código que la usa.
+- **Sobre el alcance:** hoy solo existe la familia `local`, así que la flexibilidad
+  es potencial, no usada. Se eligió porque un cambio de modelo o de base
+  vectorial es el cambio más probable en este sistema y la fábrica cuesta pocas
+  líneas.
 
 El scraper y la limpieza **no aplican ningún patrón de forma deliberada**: tienen
 una sola fuente y un solo comportamiento, así que no hay nada que elegir ni
@@ -361,15 +447,17 @@ Lo implementado hasta ahora:
 | Playwright (`playwright.async_api`) | Descarga del HTML renderizado | El sitio carga contenido con JavaScript y bloquea clientes HTTP simples; hace falta un navegador real. `asyncio` permite varias pestañas en paralelo |
 | `xml.etree.ElementTree` (stdlib) | Parseo del sitemap | Sin dependencias extra |
 | BeautifulSoup 4 + `lxml` | Extracción y limpieza del HTML | API sencilla para recorrer y modificar el árbol HTML; `lxml` es un parser rápido y tolerante con HTML roto |
+| `multilingual-e5-small` (`sentence-transformers`) | Embeddings | Multilingüe, gratuito, pequeño y con 512 tokens de contexto. Corre en CPU para dejar la VRAM al LLM |
+| Chroma | Base vectorial | Código abierto, embebida o como servidor con el mismo código, filtrado por metadatos y proporcionada a ~7.700 vectores |
+| `python-dotenv` | Configuración | Parámetros externalizados en `.env` sin tocar el código |
 
-Decisiones ya tomadas, aún sin implementar:
+Decisión tomada, aún sin implementar:
 
 | Tecnología | Uso | Justificación |
 |---|---|---|
-| `multilingual-e5-small` | Embeddings | Multilingüe (el contenido está en español), gratuito y pequeño. Admite 512 tokens, que caben los chunks de ~1.000 caracteres. Se ejecutará en CPU para dejar la VRAM al LLM |
-| Ollama + modelo local | LLM | Modelos de código abierto que corren en local, sin costo. El hardware de desarrollo es una GTX 1060 de 6 GB, que limita a modelos pequeños (3B por defecto; 7B opcional) |
+| Ollama + modelo local | LLM | Modelos de código abierto que corren en local, sin costo. El hardware de desarrollo es una GTX 1060 de 6 GB, que limita a modelos pequeños: 3B por defecto y 7B opcional |
 
-La base vectorial y la interfaz están pendientes de definir.
+La interfaz está pendiente de definir.
 
 ## Limitaciones conocidas y decisiones de diseño
 
@@ -404,6 +492,16 @@ La base vectorial y la interfaz están pendientes de definir.
 - **Las listas pueden contener títulos.** Algunos elementos `<li>` son en realidad
   títulos de bloque (`- PORTAFOLIO BÁSICO`) y se conservan como viñeta.
 - **Es una foto del sitio en un momento dado.** No hay actualización incremental.
+- **Los puntajes de similitud de e5 están muy comprimidos.** No se puede usar un 
+  umbral fijo para decidir "no tengo información sobre eso", habrá que resolverlo 
+  en el RAG.
+- **La base vectorial no se versiona** (`data/chroma/`, ~54 MB). Tras clonar hay que
+  ejecutar el indexador (~5 minutos y descarga del modelo) hasta que Docker lo
+  automatice.
+- **Chroma en Docker exige que cliente y servidor tengan la misma versión**
+  (`chromadb==1.5.9`); habrá que fijar la imagen del servidor.
+- **Los embeddings se calculan en CPU.** Basta para una indexación que se hace una
+  vez, pero la versión de PyTorch instalada no usa la GPU.
 - **Sin pruebas automáticas.**
 
 ## Futuras mejoras
@@ -416,3 +514,8 @@ La base vectorial y la interfaz están pendientes de definir.
 - Detectar bloques casi duplicados (no solo idénticos) y conservar todas las URLs
   donde aparece cada chunk.
 - Medir el tamaño de los chunks en tokens con el tokenizador del modelo de embeddings.
+- Reranker sobre los resultados recuperados (también ayudaría a detectar preguntas
+  sin respuesta en el sitio) - agregar.
+- Evaluación formal de la recuperación con un conjunto de preguntas y respuestas
+  esperadas.
+- Embeddings en GPU (instalando la build de PyTorch con CUDA) si el volumen crece.
