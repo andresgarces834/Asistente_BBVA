@@ -120,7 +120,8 @@ Lee `data/raw/manifest.jsonl` y genera `data/clean/paginas.jsonl` y
 minuto. Es determinista: se puede repetir y sobrescribe la salida sin tocar los
 crudos.
 
-
+El formato es `jsonl` para que cada linea sea una pagina con el objetivo de tener
+centralizada toda la información y evitar muchos documentos
 
 ### 5. Cómo usar la interfaz conversacional
 
@@ -163,18 +164,17 @@ Salida: `data/clean/paginas.jsonl` y `data/clean/descartadas.jsonl`.
 
 ### Cómo se diseñó: primero se midió, luego se limpió
 
-Antes de escribir reglas se analizaron los 1.240 HTML crudos. Dos mediciones
+Antes de escribir reglas se analizaron los 1.240 HTML crudos con ayuda de IA. Dos mediciones
 guiaron el diseño:
 
 - **Estructura:** 1.233 páginas tienen un único `<main>` y 7 no tienen; la
   mediana de texto es ~4.000 caracteres. Sobre el contenido se detectaron
-  separadores `U+2028` (21), espacios de ancho cero `U+200B` (178), espacios
-  duros `NBSP` (385) y guiones suaves (16).
+  separadores `U+2028`, espacios de ancho cero `U+200B`, espacios
+  duros `NBSP` y guiones suaves.
 - **Ruido de interfaz:** se contó cuántas páginas repiten cada línea de texto.
-  Las que aparecen solas en una línea en más del 15 % de las páginas son botones y
-  etiquetas, no contenido (`Más información`, `Anterior`, `Siguiente`, `Cerrar`,
-  `1 de 1`...). Un caso llamativo: la fecha del día (`PUBLICIDAD` + fecha) la
-  inyecta el sitio en 631 páginas y no es contenido.
+  Las páginas son botones y  etiquetas, no contenido (`Más información`, `Anterior`, 
+  `Siguiente`, `Cerrar`, `1 de 1`...). Un caso llamativo: la fecha del día (`PUBLICIDAD` + fecha) 
+  la inyecta el sitio en 631 páginas y no es contenido.
 
 ### Qué hace, por cada página
 
@@ -188,9 +188,8 @@ guiaron el diseño:
 3. **Conserva la estructura:** los títulos se convierten a markdown (`#`, `##`...)
    para poder hacer chunking por secciones, y las listas a `- `.
 4. **Normaliza Unicode:** `U+2028`/`U+2029` pasan a saltos de línea; se eliminan
-   los caracteres invisibles; `NBSP` pasa a espacio normal; se ordenan los
-   espacios y saltos de línea. Tras la limpieza no queda ninguno de esos
-   caracteres.
+   los caracteres invisibles; `NBSP` pasa a espacio normal, se ordenan los
+   espacios y saltos de línea.
 5. **Metadatos desde la URL:** `seccion`, `categoria` y `subcategoria`, para
    poder filtrar al recuperar.
 
@@ -220,10 +219,10 @@ Cada línea de `paginas.jsonl`:
 | Limpias (`paginas.jsonl`) | 1.200 |
 | Descartadas (`descartadas.jsonl`) | 40 |
 
-Una página se **descarta** si no tiene `<main>` (7) o si tras limpiar le quedan
-menos de 200 caracteres (33). Revisadas una a una, casi todas son simuladores,
+Una página se **descarta** si no tiene `<main>` o si tras limpiar le quedan
+menos de 200 caracteres. Revisadas una a una, casi todas son simuladores,
 formularios, buscadores y organigramas (imágenes): no tienen texto que indexar.
-Cada descarte queda registrado con su motivo, para poder auditarlo.
+Cada descarte queda registrado con su motivo.
 
 ### Decisiones
 
@@ -266,26 +265,23 @@ El stack de las demás etapas (embeddings, base vectorial, LLM, interfaz) está 
   contenedor. 
 - **No se espera a que la red quede inactiva** antes de capturar el HTML. En una
   prueba de 10 páginas el contenido llegó completo, pero no se garantiza para las
-  1.240. La limpieza no mostró cargas incompletas generalizadas (las páginas
-  descartadas son casi todas simuladores o formularios), con una excepción: una
-  descarga quedó mal guardada (8 KB, sin título) y hay que repetirla. Si se
-  detectan más, habrá que volver a añadir esa espera.
+  1.240. La limpieza no mostró cargas incompletas generalizadas.
 - **Una página bloqueada por el WAF con HTTP 200 se guardaría como válida.** Hoy
   solo se valida el código de estado.
 - **Posible inconsistencia si el proceso muere** justo entre guardar el HTML y
   escribir su línea en el manifest: la URL se daría por descargada sin figurar en
   él.
-- **Los datos crudos pesan ~465 MB y no se versionan** en el repositorio
-  (`data/` está en `.gitignore`), porque agregaban demasiado peso. La
-  consecuencia es que, tras clonar, hay que ejecutar el scraper para generar los
-  datos, y este necesita un Chrome con ventana y puede tardar.
+- **Los datos crudos pesan ~465 MB y no se versionan** en el repositorio, porque 
+  agregaban demasiado peso. La consecuencia es que, tras clonar, hay que ejecutar 
+  el scraper para generar los datos, y este necesita un Chrome con ventana y puede 
+  tardar.
 - **Las páginas de la limpieza son una foto de la fecha de descarga**, y el sitio
   inyecta fechas dinámicas; solo se eliminó la que acompaña a `PUBLICIDAD`.
 - **Contenido repetido entre páginas.** Bloques enteros (por ejemplo, FAQs de
   tarjetas) aparecen en cientos de páginas. La limpieza los conserva tal cual; la
   deduplicación se resolverá en el chunking.
 - **La limpieza descarta páginas con menos de 200 caracteres.** Entre ellas
-  algunos artículos de blog muy cortos (probablemente de video) quedan fuera.
+  algunos artículos de blog muy cortos quedan fuera.
 - **Las listas pueden contener títulos.** Algunos elementos `<li>` son en realidad
   títulos de bloque (`- PORTAFOLIO BÁSICO`) y se conservan como viñeta.
 - **Es una foto del sitio en un momento dado.** No hay actualización incremental.
@@ -298,6 +294,5 @@ El stack de las demás etapas (embeddings, base vectorial, LLM, interfaz) está 
 - Actualización incremental usando `lastmod`.
 - Registrar las URLs fallidas en un archivo para poder auditarlas.
 - Pruebas unitarias de limpieza y parseo del sitemap.
-- Reintentar la descarga que quedó incompleta (`plan-de-ahorro.html`).
 - Detectar texto repetido entre páginas en la limpieza, en vez de esperar al
   chunking.
