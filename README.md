@@ -243,11 +243,15 @@ guiaron el diseño:
    compartir, navegación de sliders, avisos de cookies); y después, líneas
    sueltas de la lista de ruido medida arriba.
 3. **Conserva la estructura:** los títulos se convierten a markdown (`#`, `##`...)
-   para poder hacer chunking por secciones, y las listas a `- `.
-4. **Normaliza Unicode:** `U+2028`/`U+2029` pasan a saltos de línea; se eliminan
+   para poder hacer chunking por secciones, y las listas a `- `. El título de un
+   elemento de lista (tarjetas, ilustraciones...) se deja como texto de su viñeta
+   y no como un título de sección.
+4. **Reconstruye las pestañas:** la etiqueta de cada pestaña se escribe, en negrita,
+   delante del contenido de su panel (ver más abajo).
+5. **Normaliza Unicode:** `U+2028`/`U+2029` pasan a saltos de línea; se eliminan
    los caracteres invisibles; `NBSP` pasa a espacio normal, se ordenan los
    espacios y saltos de línea.
-5. **Metadatos desde la URL:** `seccion`, `categoria` y `subcategoria`, para
+6. **Metadatos desde la URL:** `seccion`, `categoria` y `subcategoria`, para
    poder filtrar al recuperar.
 
 ### Salida
@@ -273,8 +277,8 @@ Cada línea de `paginas.jsonl`:
 | | Páginas |
 |---|---|
 | En el manifest | 1.240 |
-| Limpias (`paginas.jsonl`) | 1.200 |
-| Descartadas (`descartadas.jsonl`) | 40 |
+| Limpias (`paginas.jsonl`) | 1.201 |
+| Descartadas (`descartadas.jsonl`) | 39 |
 
 Una página se **descarta** si no tiene `<main>` o si tras limpiar le quedan
 menos de 200 caracteres. Revisadas una a una, casi todas son simuladores,
@@ -291,6 +295,33 @@ Cada descarte queda registrado con su motivo.
   páginas; `lxml` tolera mejor el HTML mal formado.
 - **Reglas medidas, no supuestas:** la lista de ruido sale de la frecuencia real
   de las líneas, no de una intuición sobre el sitio.
+
+### Corrección posterior: pestañas y títulos dentro de viñetas
+
+Al probar el asistente con una pregunta real (*"¿Qué puedo hacer en mi línea
+empresarial?"*, cuyo texto es el título de una página de líneas de atención) la
+respuesta salió incompleta. Parte de la causa estaba en la limpieza:
+
+- **Las pestañas perdían su etiqueta.** El HTML enlaza cada pestaña (`role="tab"`)
+  con su panel (`role="tabpanel"`, por `aria-controls`), pero el texto plano dejaba
+  todas las etiquetas juntas y lejos de su contenido: no se sabía qué viñetas eran de
+  "Comercio exterior" o de "Leasing". Hay 3.258 pestañas en 738 páginas; la mayoría
+  (preguntas frecuentes) repite su título dentro del panel y no pierde nada. Las que
+  sí lo pierden son 306 etiquetas en 78 páginas.
+- **Solución:** si la etiqueta no aparece como título propio de su panel (empieza
+  con ella o hay un texto que es exactamente esa etiqueta), se escribe en negrita
+  (`**Comercio exterior**`) delante del contenido y se elimina la lista de
+  etiquetas, que quedaba redundante.
+- **La etiqueta es una línea en negrita y no un título (`####`)** a propósito: así
+  todo el grupo de pestañas sigue siendo una sola sección bajo su título común, y la
+  pregunta general ("¿qué puedo hacer en mi línea?") sigue encontrando el contenido.
+  Con un título por pestaña, cada una sería un chunk aparte sin el título común.
+- **Primer intento descartado:** comprobar si la etiqueta aparecía *en cualquier
+  parte* del panel. "Leasing" figura dentro de la frase "Soporte para el pago del
+  Leasing", así que daba la etiqueta por presente y no la reconstruía.
+- **Títulos dentro de viñetas.** Un elemento de lista cuyo título era un `<h2>`
+  quedaba como `- ## Título` (1.642 líneas en 248 páginas). Ahora es `- Título`
+  (quedan 5 casos).
 
 ## Etapa 3 — Chunking (implementada)
 

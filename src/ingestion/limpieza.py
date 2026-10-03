@@ -4,7 +4,8 @@ Lee data/raw/manifest.jsonl y, por cada página:
     1. Extrae título, descripción y el contenido de <main>.
     2. Quita el ruido de interfaz (migas de pan, botones de compartir, etc.).
     3. Conserva los títulos como markdown (#, ##) para poder hacer chunking por secciones, y las listas como "- ".
-    4. Normaliza caracteres unicode problematicos.
+    4. Reconstruye las pestañas: la etiqueta de cada una va delante de su contenido.
+    5. Normaliza caracteres unicode problematicos.
 
 Salida:
     data/clean/paginas.jsonl      una pagina limpia por línea
@@ -23,7 +24,7 @@ import statistics
 import unicodedata
 from pathlib import Path
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 RAIZ = Path(__file__).resolve().parents[2]
 RAW_DIR = RAIZ / "data" / "raw"
@@ -67,10 +68,10 @@ def normalizar(texto: str) -> str:
     texto = unicodedata.normalize("NFC", texto)
 
     # Separadores de línea/párrafo que algunos lectores tratan como saltos.
-    texto = texto.replace(" ", "\n").replace(" ", "\n\n")
+    texto = texto.replace("\u2028", "\n").replace("\u2029", "\n\n")
 
     # Invisibles: espacio de ancho cero y guión suave.
-    texto = re.sub(r"[​‌‍⁠﻿­]", "", texto)
+    texto = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad]", "", texto)
     texto = texto.replace("\xa0", " ")
     texto = re.sub(r"[ \t\r\f\v]+", " ", texto)
 
@@ -123,6 +124,61 @@ def clasificar(url: str) -> dict:
         "subcategoria": partes[2] if len(partes) > 2 else "",
     }
 
+def comparable(texto: str) -> str:
+    """Texto sin diferencias de espacios ni mayúsculas, para compararlo"""
+
+    return re.sub(r"\s+", " ", texto).strip().lower()
+
+def etiqueta_en_panel(etiqueta: str, panel) -> bool:
+    """¿El panel ya muestra la etiqueta como su propio título?
+
+    Cuenta si el panel empieza con ella o si hay un texto que es exactamente la
+    etiqueta. No basta con que aparezca dentro de una frase: "Leasing" está en
+    "Soporte para el pago del Leasing" y eso no es un título.
+    """
+
+    buscada = comparable(etiqueta)
+    if comparable(panel.get_text(" ", strip=True)).startswith(buscada):
+        return True
+    return panel.find(string=lambda s: comparable(s) == buscada) is not None
+
+def reconstruir_pestanas(main) -> None:
+    """Pone la etiqueta de cada pestaña delante del contenido de su panel.
+
+    El HTML enlaza cada pestaña (role=tab) con su panel (role=tabpanel) mediante
+    aria-controls, pero en texto plano todas las etiquetas quedaban juntas y lejos
+    de su contenido: no se sabía qué viñetas eran de "Comercio exterior" o de
+    "Leasing". Solo se actúa cuando la etiqueta NO aparece ya dentro de su panel
+    (las pestañas de preguntas frecuentes repiten su título y no pierden nada).
+
+    La etiqueta se escribe como línea en negrita y no como título: así el grupo de
+    pestañas sigue siendo una sola sección bajo su título común, y la pregunta
+    general ("¿qué puedo hacer en mi línea?") sigue encontrando todo el contenido.
+    """
+
+    por_lista = {}
+    for pestana in main.select("[role=tab][aria-controls]"):
+        lista = pestana.find_parent(attrs={"role": "tablist"}) or pestana.parent
+        por_lista.setdefault(id(lista), []).append(pestana)
+
+    for pestanas in por_lista.values():
+        sin_etiqueta = []
+        for pestana in pestanas:
+            panel = main.find(id=pestana["aria-controls"])
+            etiqueta = pestana.get_text(" ", strip=True)
+            if panel is None or not etiqueta:
+                continue
+            if not etiqueta_en_panel(etiqueta, panel):
+                sin_etiqueta.append((panel, etiqueta))
+
+        for panel, etiqueta in sin_etiqueta:
+            panel.insert(0, NavigableString(f"\n\n**{etiqueta}**\n\n"))
+
+        # Si todas las etiquetas ya viven en su panel, la lista de pestañas sobra.
+        if sin_etiqueta and len(sin_etiqueta) == len(pestanas):
+            for pestana in pestanas:
+                pestana.decompose()
+
 def extraer(html: str) -> dict | None:
     """Devuelve título, descripción, encabezados y texto, o None si no hay <main>"""
 
@@ -141,8 +197,15 @@ def extraer(html: str) -> dict | None:
     for tag in main.select(CLASES_RUIDO):
         tag.decompose()
 
+    reconstruir_pestanas(main)
+
     # Títulos como markdown (#, ##, etc) y listas como "- ".
     for h in main.find_all(re.compile(r"^h[1-6]$")):
+        if h.find_parent("li"):
+            # El título de un elemento de lista (tarjetas, ilustraciones...) es el
+            # texto de su viñeta, no una sección: con "##" quedaba "- ## Título".
+            h.replace_with(h.get_text(" ", strip=True))
+            continue
         nivel = int(h.name[1])
         h.replace_with(f"\n\n{'#' * nivel} {h.get_text(' ', strip=True)}\n\n")
     for li in main.find_all("li"):
