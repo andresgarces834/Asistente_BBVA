@@ -26,12 +26,10 @@ LOTE = 128  # chunks por escritura a la base
 # Metadatos que se guardan con cada chunk, para poder filtrar al recuperar.
 CAMPOS_METADATOS = ("url", "titulo", "seccion", "categoria", "subcategoria", "orden", "repeticiones")
 
-
 def texto_a_vectorizar(chunk: dict) -> str:
     """El título de la página se antepone: da contexto a chunks de mitad de página"""
 
     return f"{chunk['titulo']}\n{chunk['texto']}"
-
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -71,7 +69,6 @@ def main() -> None:
         print(f"[{hechos}/{len(pendientes)}] {transcurrido:.0f}s transcurridos, ~{restante:.0f}s restantes")
 
     print(f"Listo. Chunks en la base: {store.contar()}")
-
 
 if __name__ == "__main__":
     main()

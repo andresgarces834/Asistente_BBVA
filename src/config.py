@@ -29,6 +29,16 @@ class Config:
     chroma_path: str = "data/chroma"
     chroma_collection: str = "bbva"
 
+    # LLM (Ollama). num_ctx: el contexto por defecto de Ollama es corto y recorta
+    # el prompt en silencio; con 5 fragmentos más el historial hace falta más.
+    ollama_host: str = "http://localhost:11434"
+    llm_model: str = "qwen3:4b"
+    llm_num_ctx: int = 4096
+    llm_temperature: float = 0.2
+
+    # Recuperación
+    top_k: int = 5
+
 @lru_cache(maxsize=1)
 def obtener_config() -> Config:
     load_dotenv(RAIZ / ".env")
@@ -41,4 +51,9 @@ def obtener_config() -> Config:
         chroma_port=int(os.getenv("CHROMA_PORT", d.chroma_port)),
         chroma_path=os.getenv("CHROMA_PATH", d.chroma_path),
         chroma_collection=os.getenv("CHROMA_COLLECTION", d.chroma_collection),
+        ollama_host=os.getenv("OLLAMA_HOST", d.ollama_host),
+        llm_model=os.getenv("LLM_MODEL", d.llm_model),
+        llm_num_ctx=int(os.getenv("LLM_NUM_CTX", d.llm_num_ctx)),
+        llm_temperature=float(os.getenv("LLM_TEMPERATURE", d.llm_temperature)),
+        top_k=int(os.getenv("TOP_K", d.top_k)),
     )

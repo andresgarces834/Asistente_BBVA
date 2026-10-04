@@ -1,7 +1,7 @@
 """Interfaces de los proveedores.
 
-El resto del sistema (indexación, RAG) solo conoce estas clases abstractas,
-nunca Chroma ni sentence-transformers directamente. Así se puede cambiar un
+El resto del sistema solo conoce estas clases abstractas, nunca Chroma 
+ni sentence-transformers directamente, así se puede cambiar un
 proveedor sin tocar la lógica de negocio.
 """
 
@@ -44,3 +44,8 @@ class VectorStore(ABC):
     @abstractmethod
     def reiniciar(self) -> None:
         """Borra todo lo indexado"""
+
+class LLM(ABC):
+    @abstractmethod
+    def generar(self, mensajes: list[dict]) -> str:
+        """Respuesta del modelo. `mensajes`: [{'role': 'system'|'user'|'assistant', 'content': str}]"""

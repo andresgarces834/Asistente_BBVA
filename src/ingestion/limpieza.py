@@ -24,7 +24,8 @@ import statistics
 import unicodedata
 from pathlib import Path
 
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup
+from bs4.element import NavigableString
 
 RAIZ = Path(__file__).resolve().parents[2]
 RAW_DIR = RAIZ / "data" / "raw"
@@ -190,7 +191,7 @@ def extraer(html: str) -> dict | None:
 
     titulo = soup.title.get_text(strip=True) if soup.title else ""
     meta = soup.find("meta", attrs={"name": "description"})
-    descripcion = (meta.get("content") or "").strip() if meta else ""
+    descripcion = str(meta.get("content") or "").strip() if meta else ""
 
     for tag in main.select(ETIQUETAS_RUIDO):
         tag.decompose()
