@@ -1,6 +1,6 @@
 """Patrón Factory (Abstract Factory): crea la familia de proveedores que van juntos.
 
-`FabricaProveedores` define qué se crea (embeddings, base vectorial y LLM);
+`FabricaProveedores` define qué se crea (embeddings, base vectorial, LLM e historial);
 cada subclase define como y con que tecnología. Hoy solo existe la familia
 `local`. Añadir otra es una subclase más y una línea
 en FABRICAS, sin modificar el código que usa la fábrica.
@@ -8,7 +8,8 @@ en FABRICAS, sin modificar el código que usa la fábrica.
 
 from abc import ABC, abstractmethod
 
-from src.config import Config
+from src.config import RAIZ, Config
+from src.memory.historial import Historial, HistorialSQLite
 from src.providers.base import LLM, Embeddings, VectorStore
 from src.providers.local import ChromaVectorStore, E5Embeddings, OllamaLLM
 
@@ -25,6 +26,9 @@ class FabricaProveedores(ABC):
     @abstractmethod
     def crear_llm(self) -> LLM: ...
 
+    @abstractmethod
+    def crear_historial(self) -> Historial: ...
+
 class FabricaLocal(FabricaProveedores):
     def crear_embeddings(self) -> Embeddings:
         c = self.config
@@ -35,6 +39,9 @@ class FabricaLocal(FabricaProveedores):
 
     def crear_llm(self) -> LLM:
         return OllamaLLM(self.config)
+
+    def crear_historial(self) -> Historial:
+        return HistorialSQLite(RAIZ / self.config.historial_path)
 
 FABRICAS: dict[str, type[FabricaProveedores]] = {"local": FabricaLocal}
 
