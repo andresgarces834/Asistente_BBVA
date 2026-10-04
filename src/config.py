@@ -32,7 +32,7 @@ class Config:
     # LLM (Ollama). num_ctx: el contexto por defecto de Ollama es corto y recorta
     # el prompt en silencio; con 5 fragmentos más el historial hace falta más.
     ollama_host: str = "http://localhost:11434"
-    llm_model: str = "qwen3:4b"
+    llm_model: str = "qwen3:4b-instruct"
     llm_num_ctx: int = 4096
     llm_temperature: float = 0.2
 

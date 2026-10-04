@@ -182,15 +182,15 @@ los chunks ya indexados.
 
 ### 7. Descargar el modelo de lenguaje
 
-El modelo se elige con la variable `LLM_MODEL` (por defecto, `qwen3:4b`). Se recomienda
-`qwen3:4b-instruct`, que responde mucho más rápido:
+El modelo se elige con la variable `LLM_MODEL`. Por defecto es `qwen3:4b-instruct`, que
+responde mucho más rápido que las variantes que razonan antes de contestar:
 
 ```bash
 ollama pull qwen3:4b-instruct
 ```
 
-Después, copia `.env.example` a `.env` y cambia la línea `LLM_MODEL=qwen3:4b` por
-`LLM_MODEL=qwen3:4b-instruct`.
+Para usar otro modelo, descárgalo del mismo modo, copia `.env.example` a `.env` y cambia
+la línea `LLM_MODEL`.
 
 ### 8. Hacer una pregunta
 
@@ -519,9 +519,8 @@ retriever y el mismo prompt: `qwen3:4b`, que razona siempre antes de responder, 
 | Calidad en las preguntas de prueba | similar | similar |
 
 Ambas acertaron la mayoría de las preguntas y fallaron en preguntas distintas. La
-diferencia real está en la velocidad, así que se recomienda `qwen3:4b-instruct`.
-**El valor por defecto del código sigue siendo `qwen3:4b`**; para usar el recomendado
-hay que cambiar `LLM_MODEL` (paso 7).
+diferencia real está en la velocidad, así que `qwen3:4b-instruct` es el modelo por
+defecto. Se puede cambiar con la variable `LLM_MODEL` (paso 7).
 
 Las preguntas de prueba son pocas y las escribió el autor: datos concretos de
 productos, preguntas sin relación con el sitio, un saludo y una pregunta de
@@ -609,7 +608,7 @@ Lo implementado hasta ahora:
 | `multilingual-e5-small` (`sentence-transformers`) | Embeddings | Multilingüe, gratuito, pequeño y con 512 tokens de contexto; corre en CPU para dejar la VRAM al LLM |
 | Chroma | Base vectorial | Código abierto, embebida o como servidor con el mismo código, filtrado por metadatos |
 | `python-dotenv` | Configuración | Parámetros externalizados en `.env` sin tocar el código |
-| Ollama + `qwen3:4b-instruct` (cliente `ollama`) | LLM | Modelo de código abierto que corre en local, sin costo ni API externa. El hardware de desarrollo es una GTX 1060 de 6 GB, que limita a modelos pequeños. Se recomienda la variante *instruct*, mucho más rápida que la que razona |
+| Ollama + `qwen3:4b-instruct` (cliente `ollama`) | LLM | Modelo de código abierto que corre en local, sin costo ni API externa. El hardware de desarrollo es una GTX 1060 de 6 GB, que limita a modelos pequeños. Se usa la variante *instruct*, mucho más rápida que la que razona |
 
 La interfaz está pendiente de definir.
 
