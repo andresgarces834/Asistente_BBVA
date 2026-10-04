@@ -130,18 +130,29 @@ class OllamaLLM(LLM):
     def generar(self, mensajes: list[dict]) -> str:
         try:
             return self._chat(mensajes)
-        except self._ollama.ResponseError as e:
-            if e.status_code == 404:
-                raise RuntimeError(
-                    f"El modelo '{self._modelo}' no está descargado en Ollama. "
-                    f"Descárgalo con: ollama pull {self._modelo}"
-                ) from e
-            raise RuntimeError(f"Ollama devolvió un error: {e}") from e
-        except ConnectionError as e:
-            raise RuntimeError(
+        except (self._ollama.ResponseError, ConnectionError) as e:
+            raise self._traducir(e) from e
+
+    def verificar(self) -> None:
+        try:
+            self._cliente.show(self._modelo)
+        except (self._ollama.ResponseError, ConnectionError) as e:
+            raise self._traducir(e) from e
+
+    def _traducir(self, e: Exception) -> RuntimeError:
+        """Convierte el error de Ollama en un mensaje que dice cómo resolverlo"""
+
+        if isinstance(e, ConnectionError):
+            return RuntimeError(
                 f"No se pudo conectar con Ollama en {self._host}. "
                 "¿Está en ejecución (ollama serve)?"
-            ) from e
+            )
+        if isinstance(e, self._ollama.ResponseError) and e.status_code == 404:
+            return RuntimeError(
+                f"El modelo '{self._modelo}' no está descargado en Ollama. "
+                f"Descárgalo con: ollama pull {self._modelo}"
+            )
+        return RuntimeError(f"Ollama devolvió un error: {e}")
 
     def _chat(self, mensajes: list[dict]) -> str:
         # Los modelos que "piensan" antes de responder gastan tiempo y tokens que

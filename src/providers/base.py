@@ -49,3 +49,7 @@ class LLM(ABC):
     @abstractmethod
     def generar(self, mensajes: list[dict]) -> str:
         """Respuesta del modelo. `mensajes`: [{'role': 'system'|'user'|'assistant', 'content': str}]"""
+
+    @abstractmethod
+    def verificar(self) -> None:
+        """Lanza RuntimeError, con instrucciones, si el modelo no está disponible"""
