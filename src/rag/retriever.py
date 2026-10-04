@@ -13,3 +13,8 @@ class Retriever:
 
         vector = self._embeddings.embed_consulta(pregunta)
         return self._store.buscar(vector, self._top_k, filtro)
+
+    def contar(self) -> int:
+        """Cuántos fragmentos hay indexados"""
+
+        return self._store.contar()
