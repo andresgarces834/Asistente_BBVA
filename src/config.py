@@ -23,7 +23,7 @@ class Config:
     embedding_batch: int = 32
 
     # Base vectorial (Chroma). Con CHROMA_HOST vacío corre embebida en
-    # CHROMA_PATH; con host, se conecta al servidor (el de docker-compose).
+    # CHROMA_PATH, con host se conecta al servidor.
     chroma_host: str = ""
     chroma_port: int = 8000
     chroma_path: str = "data/chroma"
@@ -38,6 +38,23 @@ class Config:
 
     # Recuperación
     top_k: int = 5
+
+    # n_mensajes cuenta mensajes, no turnos:
+    # 6 son los últimos 3 intercambios. Con reescritura, una pregunta de seguimiento
+    # ("¿y la del plan plus?") se convierte en una pregunta completa antes de buscar.
+    n_mensajes: int = 6
+    historial_path: str = "data/historial/historial.db"
+    reescribir_preguntas: bool = True
+
+    # API web
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
+
+def _booleano(nombre: str, defecto: bool) -> bool:
+    valor = os.getenv(nombre)
+    if valor is None:
+        return defecto
+    return valor.strip().lower() in ("1", "true", "si", "sí", "yes")
 
 @lru_cache(maxsize=1)
 def obtener_config() -> Config:
@@ -56,4 +73,9 @@ def obtener_config() -> Config:
         llm_num_ctx=int(os.getenv("LLM_NUM_CTX", d.llm_num_ctx)),
         llm_temperature=float(os.getenv("LLM_TEMPERATURE", d.llm_temperature)),
         top_k=int(os.getenv("TOP_K", d.top_k)),
+        n_mensajes=int(os.getenv("N_MENSAJES", d.n_mensajes)),
+        historial_path=os.getenv("HISTORIAL_PATH", d.historial_path),
+        reescribir_preguntas=_booleano("REESCRIBIR_PREGUNTAS", d.reescribir_preguntas),
+        api_host=os.getenv("API_HOST", d.api_host),
+        api_port=int(os.getenv("API_PORT", d.api_port)),
     )
