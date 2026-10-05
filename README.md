@@ -3,8 +3,6 @@
 Asistente conversacional que responde preguntas sobre el contenido del sitio
 público de BBVA Colombia (<https://www.bbva.com.co/>) usando RAG. Prueba técnica de Machine Learning Engineer.
 
-> **Estado: trabajo en progreso.** Este README se actualiza junto con el código.
-
 ## Estado del proyecto
 
 | Etapa | Estado |
@@ -86,7 +84,6 @@ Asistente_BBVA/
 │   └── ui/
 │       ├── api.py             # API web (FastAPI)                            (hecho)
 │       └── static/index.html  # página de chat                               (hecho)
-├── scripts/                   # validar si son necesarios                    (pendiente)
 └── tests/
     ├── test_metricas.py       # pruebas de las métricas del historial        (hecho)
     └── test_chat.py           # pruebas del servicio de chat                 (hecho)
