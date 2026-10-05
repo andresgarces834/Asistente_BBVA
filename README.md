@@ -124,8 +124,8 @@ cd Asistente_BBVA
 
 ### 2. Configurar (opcional)
 
-No hace falta para probarlo. Para cambiar algún parámetro (el modelo, cuántos mensajes se
-recuerdan, el puerto...), copia `.env.example` a `.env` y edita las líneas que quieras:
+No hace falta para probarlo. Para cambiar algún parámetro, copia `.env.example` a `.env` 
+y edita las líneas que quieras:
 Docker lo lee solo. Lo único que Docker fija por su cuenta son las direcciones de los
 servicios. Si el puerto 8000 de tu equipo ya está ocupado, pon por ejemplo `API_PORT=8001`
 en el `.env` y abre la interfaz en ese puerto.
