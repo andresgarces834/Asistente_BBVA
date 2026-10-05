@@ -52,41 +52,41 @@ Así se puede corregir o cambiar la limpieza sin volver a scrapear el sitio.
 
 ```
 Asistente_BBVA/
-├── Dockerfile                 # imagen de la aplicación                      (hecho)
-├── docker-compose.yml         # todos los servicios con un solo comando      (hecho)
-├── docker-compose.gpu.yml     # añade la GPU NVIDIA al servicio de Ollama    (hecho)
+├── Dockerfile                 # imagen de la aplicación
+├── docker-compose.yml         # todos los servicios con un solo comando
+├── docker-compose.gpu.yml     # añade la GPU NVIDIA al servicio de Ollama
 ├── data/
 │   ├── raw/                   # HTML crudo + manifest.jsonl 
 │   ├── clean/                 # paginas, descartadas y chunks 
 │   ├── chroma/                # base vectorial local 
 │   └── historial/             # conversaciones en SQLite 
 ├── src/
-│   ├── config.py              # configuración desde .env                     (hecho)
+│   ├── config.py              # configuración desde .env
 │   ├── scraping/
-│   │   └── scraper.py         # descarga paralela del HTML crudo             (hecho)
+│   │   └── scraper.py         # descarga paralela del HTML crudo
 │   ├── ingestion/
-│   │   ├── limpieza.py        # HTML crudo -> texto limpio                   (hecho)
-│   │   ├── chunking.py        # páginas -> chunks (Strategy)                 (hecho)
-│   │   └── indexador.py       # chunks -> embeddings -> Chroma               (hecho)
+│   │   ├── limpieza.py        # HTML crudo -> texto limpio
+│   │   ├── chunking.py        # páginas -> chunks (Strategy)
+│   │   └── indexador.py       # chunks -> embeddings -> Chroma
 │   ├── providers/
-│   │   ├── base.py            # interfaces Embeddings / VectorStore / LLM    (hecho)
-│   │   ├── local.py           # e5 + Chroma + Ollama                         (hecho)
-│   │   └── factory.py         # Factory de proveedores                       (hecho)
+│   │   ├── base.py            # interfaces Embeddings / VectorStore / LLM
+│   │   ├── local.py           # e5 + Chroma + Ollama
+│   │   └── factory.py         # Factory de proveedores
 │   ├── rag/
-│   │   ├── asistente.py       # fachada del RAG (Facade)                     (hecho)
-│   │   ├── chat.py            # servicio de conversación (historial + RAG)   (hecho)
-│   │   ├── prompt.py          # construcción del prompt                      (hecho)
-│   │   └── retriever.py       # búsqueda de fragmentos                       (hecho)
+│   │   ├── asistente.py       # fachada del RAG (Facade)
+│   │   ├── chat.py            # servicio de conversación (historial + RAG)
+│   │   ├── prompt.py          # construcción del prompt
+│   │   └── retriever.py       # búsqueda de fragmentos
 │   ├── memory/
-│   │   └── historial.py       # historial por sesión (Repository, SQLite)    (hecho)
+│   │   └── historial.py       # historial por sesión (Repository, SQLite)
 │   ├── analytics/
-│   │   └── metricas.py        # métricas del historial (cálculo y comando)   (hecho)
+│   │   └── metricas.py        # métricas del historial (cálculo y comando)
 │   └── ui/
-│       ├── api.py             # API web (FastAPI)                            (hecho)
-│       └── static/index.html  # página de chat                               (hecho)
+│       ├── api.py             # API web (FastAPI)
+│       └── static/index.html  # página de chat
 └── tests/
-    ├── test_metricas.py       # pruebas de las métricas del historial        (hecho)
-    └── test_chat.py           # pruebas del servicio de chat                 (hecho)
+    ├── test_metricas.py       # pruebas de las métricas del historial
+    └── test_chat.py           # pruebas del servicio de chat
 ```
 
 ## Requisitos previos
@@ -124,8 +124,8 @@ cd Asistente_BBVA
 
 ### 2. Configurar (opcional)
 
-No hace falta para probarlo. Para cambiar algún parámetro (el modelo, cuántos mensajes se
-recuerdan, el puerto...), copia `.env.example` a `.env` y edita las líneas que quieras:
+No hace falta para probarlo. Para cambiar algún parámetro, copia `.env.example` a `.env` 
+y edita las líneas que quieras:
 Docker lo lee solo. Lo único que Docker fija por su cuenta son las direcciones de los
 servicios. Si el puerto 8000 de tu equipo ya está ocupado, pon por ejemplo `API_PORT=8001`
 en el `.env` y abre la interfaz en ese puerto.
