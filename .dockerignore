@@ -1,0 +1,6 @@
+# A la imagen solo entran el código y las dependencias; todo lo demás se queda fuera.
+*
+!requirements.txt
+!src
+!tests
+**/__pycache__

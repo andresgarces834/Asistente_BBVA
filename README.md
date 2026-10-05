@@ -17,7 +17,7 @@ público de BBVA Colombia (<https://www.bbva.com.co/>) usando RAG. Prueba técni
 | 6. Historial de conversación por ID | Hecho |
 | 7. Interfaz conversacional | Hecho |
 | 8. Análisis del historial (métricas) | Hecho |
-| 9. Dockerización | Siguiente |
+| 9. Dockerización | Hecho |
 
 ## Flujo de datos
 
@@ -54,6 +54,9 @@ Así se puede corregir o cambiar la limpieza sin volver a scrapear el sitio.
 
 ```
 Asistente_BBVA/
+├── Dockerfile                 # imagen de la aplicación                      (hecho)
+├── docker-compose.yml         # todos los servicios con un solo comando      (hecho)
+├── docker-compose.gpu.yml     # añade la GPU NVIDIA al servicio de Ollama    (hecho)
 ├── data/
 │   ├── raw/                   # HTML crudo + manifest.jsonl 
 │   ├── clean/                 # paginas, descartadas y chunks 
@@ -91,19 +94,96 @@ Asistente_BBVA/
 
 ## Requisitos previos
 
+Para levantar el sistema con Docker (lo recomendado):
+
+- **Docker con Compose v2.24 o superior.** En Windows y macOS, Docker Desktop en Linux, Docker 
+  Engine con el plugin de Compose.
+- **Unos 15 GB libres en disco:** las imágenes y los dos modelos se descargan la primera vez.
+- Conexión a internet la primera vez.
+- Opcional: una **GPU NVIDIA**, para que el modelo de lenguaje responda más rápido 
+
+Para ejecutarlo sin Docker (desarrollo, y para el scraper):
+
 - Python 3.13.5.
 - **Ollama** instalado y en ejecución (<https://ollama.com>), con el modelo de lenguaje
   descargado. Sin GPU funciona en CPU, pero es bastante más lento.
-- **Google Chrome instalado**, pero solo si se va a ejecutar el scraper (paso 3,
-  opcional). Se lanza con `channel="chrome"`.
+- **Google Chrome instalado**, pero solo si se va a ejecutar el scraper (paso 3 de la
+  ejecución local, opcional). Se lanza con `channel="chrome"`.
 - Conexión a internet para el scraper y para descargar los modelos.
 - Varios GB libres en disco: el entorno virtual con PyTorch, el modelo de embeddings
   y el modelo de Ollama.
 
-Todavía no hay Docker. Las variables de entorno son opcionales: todo tiene un valor
+Las variables de entorno son opcionales: todo tiene un valor
 por defecto y `.env.example` lista los parámetros (cópialo a `.env` para cambiarlos).
 
 ## Instrucciones paso a paso
+
+### 1. Clonar el repositorio
+
+```bash
+git clone https://github.com/andresgarces834/Asistente_BBVA
+cd Asistente_BBVA
+```
+
+### 2. Configurar (opcional)
+
+No hace falta para probarlo. Para cambiar algún parámetro (el modelo, cuántos mensajes se
+recuerdan, el puerto...), copia `.env.example` a `.env` y edita las líneas que quieras:
+Docker lo lee solo. Lo único que Docker fija por su cuenta son las direcciones de los
+servicios. Si el puerto 8000 de tu equipo ya está ocupado, pon por ejemplo `API_PORT=8001`
+en el `.env` y abre la interfaz en ese puerto.
+
+### 3. Levantar el sistema
+
+```bash
+docker compose up --build
+```
+
+Con una GPU NVIDIA, añade el archivo de la GPU para que el modelo de lenguaje la use. Sin
+ella el modelo corre en CPU y cada respuesta tarda alrededor de un minuto; con la GPU, unos
+segundos:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+Es un solo comando y levanta todo. **La primera vez tarda bastante:**
+descarga las imágenes y los dos modelos y después indexa el sitio. Los arranques
+siguientes son mucho más rápidos, porque lo descargado y lo indexado se conserva. El
+sistema está listo cuando el registro muestra `Uvicorn running on http://0.0.0.0:8000`.
+
+### 4. Usar la interfaz de chat
+
+Abre <http://localhost:8000> en el navegador.
+
+- Escribe una pregunta o elige una de las sugerencias. Bajo cada respuesta, **Fuentes**
+  muestra las páginas del sitio que se usaron.
+- La conversación tiene un **ID**, que se ve arriba y el navegador recuerda. **Nueva**
+  empieza otra conversación y **Cargar ID** vuelve a una anterior.
+- Las preguntas de seguimiento se entienden gracias al historial, y bajo cada respuesta se
+  ve con qué pregunta se buscó.
+
+La documentación interactiva de la API está en <http://localhost:8000/docs>.
+
+### 5. Analizar el historial
+
+```bash
+docker compose exec app python -m src.analytics.metricas
+```
+
+### 6. Detener el sistema
+
+```bash
+docker compose down
+```
+
+Detiene los contenedores y conserva los datos: la base vectorial, los modelos y las
+conversaciones están en volúmenes. Para borrarlos también, `docker compose down -v`.
+
+## Ejecución local, sin Docker
+
+Sirve para desarrollar y es la única forma de ejecutar el scraper. Necesita Python, Ollama
+y las dependencias instaladas.
 
 ### 1. Clonar y crear el entorno
 
@@ -566,7 +646,7 @@ retriever y el mismo prompt: `qwen3:4b`, que razona siempre antes de responder, 
 
 Ambas acertaron la mayoría de las preguntas y fallaron en preguntas distintas. La
 diferencia real está en la velocidad, así que `qwen3:4b-instruct` es el modelo por
-defecto. Se puede cambiar con la variable `LLM_MODEL` (paso 7).
+defecto. Se puede cambiar con la variable `LLM_MODEL`, en el `.env`.
 
 Las preguntas de prueba son pocas y las escribió el autor: datos concretos de
 productos, preguntas sin relación con el sitio, un saludo y una pregunta de
@@ -582,7 +662,7 @@ el sitio y responde a los saludos.
 Probarlo con preguntas reales también sirvió para depurar las etapas anteriores: la
 pregunta *"¿Qué puedo hacer en mi línea empresarial?"* devolvía una lista incompleta, lo
 que llevó a corregir la reconstrucción de pestañas en la limpieza y el título repetido
-en el chunking (ver arriba).
+en el chunking.
 
 ## Etapa 6 — Historial por ID y preguntas de seguimiento (implementada)
 
@@ -724,6 +804,81 @@ Para ver que detectan errores se rompió el código a propósito en una copia (c
 turnos, mezclar los roles, perder el orden de los mensajes...) y alguna prueba falló en
 cada caso.
 
+## Etapa 9 — Dockerización (implementada)
+
+`Dockerfile`, `docker-compose.yml`, `docker-compose.gpu.yml` y `.dockerignore`. Un solo
+comando, `docker compose up --build`, levanta el sistema completo.
+
+### Qué hace
+
+Compose arranca cinco servicios:
+
+| Servicio | Qué es | Termina |
+|---|---|---|
+| `chroma` | Base vectorial: imagen oficial de Chroma, con la versión fijada | No: sigue en ejecución |
+| `ollama` | Servidor del modelo de lenguaje: imagen oficial de Ollama | No: sigue en ejecución |
+| `modelo` | Descarga el modelo de lenguaje en Ollama, solo si falta | Sí, al terminar la descarga |
+| `indexador` | Calcula los embeddings de `data/clean/chunks.jsonl` y los guarda en Chroma | Sí; en los arranques siguientes omite lo ya indexado |
+| `app` | La interfaz de chat y la API (puerto 8000) | No: sigue en ejecución |
+
+`app` espera a que `chroma` responda, a que el modelo esté descargado y a que la base esté
+indexada: ese orden lo fija `depends_on`. Solo `app` publica un puerto en el equipo.
+
+```
+navegador --> app --> ollama        (el modelo lo descarga `modelo`)
+               |
+               +----> chroma <---- indexador <---- data/clean/chunks.jsonl
+```
+
+### Decisiones
+
+- **Un servicio por pieza, con imágenes oficiales.** Chroma y Ollama usan las suyas; solo
+  la aplicación tiene `Dockerfile`. Es lo que pide el enunciado y cada pieza se puede 
+  reiniciar o cambiar por separado.
+- **`app` e `indexador` comparten imagen:** es el mismo código con otro comando.
+- **PyTorch solo para CPU.** El paquete por defecto trae las librerías de CUDA y pesa varios
+  GB; los embeddings se calculan en CPU de todos modos.
+- **El modelo de lenguaje se descarga con un servicio, no al construir la imagen.** Es muy
+  grande y no es código. Se guarda en un volumen y, si ya está, el servicio no hace nada.
+- **La versión de Chroma está fijada** a la del cliente (`chromadb==1.5.9`): con versiones
+  distintas el cliente se niega a conectarse. Al actualizar `requirements.txt` hay que
+  cambiar también la imagen en `docker-compose.yml`.
+- **Los datos viven en volúmenes** y sobreviven a `docker compose down`. El historial usa un
+  volumen y no una carpeta del equipo porque SQLite en modo WAL no es fiable sobre las
+  carpetas que Docker Desktop comparte con Windows o macOS.
+- **Los datos limpios se montan, no se copian a la imagen** (`data/clean/`, solo lectura):
+  se pueden refrescar sin reconstruir nada.
+- **La configuración sigue externalizada.** Compose lee el `.env` si existe, igual que sin
+  Docker. Solo las direcciones de los servicios las fija `docker-compose.yml`, porque en el
+  `.env` apuntan a `localhost`, que dentro de un contenedor no sirve.
+- **La GPU es opcional y va en otro archivo** (`docker-compose.gpu.yml`). Pedirla en el
+  archivo principal haría que Docker falle en cualquier equipo sin NVIDIA. Sin ella el
+  modelo corre en CPU, bastante más lento.
+- **Usuario sin privilegios** dentro de la imagen de la aplicación, y los puertos de Chroma
+  y Ollama no se publican: así tampoco chocan con un Ollama que ya esté instalado en el
+  equipo.
+
+### Cómo se comprobó
+
+Con Docker Desktop en Windows, partiendo de cero (sin imágenes ni volúmenes del proyecto):
+
+- **Arranque completo con un solo comando.** Los servicios arrancan en el orden previsto:
+  Chroma y Ollama pasan su healthcheck, se descarga el modelo, el indexador indexa los
+  chunks y termina, y solo entonces arranca la aplicación.
+- **Una conversación real** con pregunta y seguimiento, a través de la API dentro del
+  contenedor: la respuesta es correcta y el seguimiento se reescribe bien.
+- **Persistencia.** La conversación sobrevive a reiniciar la aplicación y a un
+  `docker compose down` seguido de `up`.
+- **Segundo arranque.** No vuelve a descargar el modelo ni a indexar, y la aplicación está
+  lista en menos de un minuto, frente a varios minutos la primera vez.
+- **GPU.** Con `docker-compose.gpu.yml` el modelo se ejecuta entero en la GPU y las
+  respuestas pasan de casi un minuto a unos diez segundos.
+- **Configuración.** Un `.env` copiado de `.env.example` cambia los parámetros (se probó con
+  `N_MENSAJES` y `API_PORT`) sin romper las direcciones de los servicios.
+- **Dentro de la imagen:** la aplicación corre con un usuario sin privilegios, y funcionan
+  las pruebas automáticas (`docker compose run --rm --no-deps app python -m unittest discover tests`)
+  y el comando de métricas (`docker compose exec app python -m src.analytics.metricas`).
+
 ## Patrones de diseño
 
 | Patrón | Tipo | Dónde | Estado |
@@ -811,6 +966,7 @@ Lo implementado hasta ahora:
 | Ollama + `qwen3:4b-instruct` (cliente `ollama`) | LLM | Modelo de código abierto que corre en local, sin costo ni API externa. El hardware de desarrollo es una GTX 1060 de 6 GB, que limita a modelos pequeños. Se usa la variante *instruct*, mucho más rápida que la que razona |
 | `sqlite3` (stdlib) | Historial de conversaciones | Viene con Python, no necesita servidor y un solo archivo basta |
 | FastAPI + uvicorn | API web | Validación de entrada y documentación automática con poco código |
+| Docker + Docker Compose | Despliegue | Un solo comando levanta la aplicación, la base vectorial y el modelo de lenguaje. Chroma y Ollama usan sus imágenes oficiales y la aplicación se construye con su `Dockerfile` |
 | HTML + JavaScript sin librerías | Página de chat | Una sola página que no necesita internet ni compilación y se sirve igual dentro de Docker |
 
 ## Limitaciones conocidas y decisiones de diseño
@@ -849,11 +1005,12 @@ Lo implementado hasta ahora:
 - **Los puntajes de similitud de e5 están muy comprimidos.** No se puede usar un
   umbral fijo para decidir "no tengo información sobre eso", así que el rechazo de
   preguntas sin relación con el sitio se delega en las instrucciones del prompt.
-- **La base vectorial no se versiona** (`data/chroma/`, decenas de MB). Tras clonar hay
-  que ejecutar el indexador (unos minutos y descarga del modelo) hasta que Docker lo
-  automatice.
-- **Chroma en Docker exige que cliente y servidor tengan la misma versión**
-  (`chromadb==1.5.9`); habrá que fijar la imagen del servidor.
+- **La base vectorial no se versiona** (`data/chroma/`, decenas de MB). Con Docker la crea
+  el servicio `indexador` en el primer arranque; sin Docker hay que ejecutar el indexador
+  (unos minutos y descarga del modelo).
+- **Chroma en Docker exige que cliente y servidor tengan la misma versión.** La imagen está
+  fijada a `chromadb==1.5.9` en `docker-compose.yml`; al actualizar `requirements.txt` hay
+  que cambiarla también.
 - **Los embeddings se calculan en CPU.** Basta para una indexación que se hace una
   vez, pero la versión de PyTorch instalada no usa la GPU.
 - **La reescritura de las preguntas de seguimiento depende del modelo.** A veces añade
@@ -875,7 +1032,14 @@ Lo implementado hasta ahora:
 - **Sin autenticación.** El ID de conversación es el único control: quien lo conozca puede
   leer esa conversación. Basta para una demo local, no para exponerla en internet.
 - **Las conversaciones no se borran** ni tienen un tiempo de retención.
-- **Ollama debe estar en ejecución.** Sin GPU el modelo corre en CPU, bastante más lento.
+- **Ollama debe estar en ejecución** (con Docker lo levanta Compose). Sin GPU el modelo
+  corre en CPU, bastante más lento. Con Docker la GPU se activa con `docker-compose.gpu.yml`
+  y exige una NVIDIA.
+- **La primera ejecución con Docker es lenta y pesada:** descarga varias imágenes y dos
+  modelos y después indexa el sitio en CPU. Los arranques siguientes reutilizan los
+  volúmenes y son mucho más rápidos.
+- **El scraper y la limpieza no corren dentro de Docker.** El repositorio trae los datos ya
+  limpios (`data/clean/`), que es lo que usa el indexador.
 - **Pruebas automáticas solo para el historial, las métricas y el chat.** El resto del
   sistema se comprobó a mano.
 - **Las métricas del historial describen el uso, no el impacto ni la calidad.** El

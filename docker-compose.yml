@@ -1,0 +1,105 @@
+# Todo el sistema con un solo comando:
+#     docker compose up --build
+# La primera vez descarga imágenes y modelos (varios GB) e indexa el sitio: tarda un buen rato.
+# Con GPU NVIDIA, añade el segundo archivo (ver docker-compose.gpu.yml).
+name: asistente-bbva
+
+# Lo que comparten el indexador y la aplicación: la misma imagen y la misma configuración.
+x-app: &app
+  build: .
+  image: asistente-bbva
+  # Los parámetros del RAG (N_MENSAJES, TOP_K, LLM_MODEL...) se leen del .env, si existe.
+  env_file:
+    - path: .env
+      required: false
+  # Las direcciones de los otros servicios van aquí, y mandan sobre el .env: ahí traen las de
+  # la ejecución local (localhost), que dentro de un contenedor no sirven.
+  environment:
+    CHROMA_HOST: chroma
+    CHROMA_PORT: "8000"
+    OLLAMA_HOST: http://ollama:11434
+    API_HOST: 0.0.0.0
+    API_PORT: "8000"
+    LLM_MODEL: ${LLM_MODEL:-qwen3:4b-instruct}
+
+services:
+  # Base de datos vectorial. Su versión debe ser la misma que la del cliente (chromadb en
+  # requirements.txt); si no, el cliente se niega a conectarse. La imagen guarda sus datos en /data.
+  chroma:
+    image: chromadb/chroma:1.5.9
+    volumes:
+      - chroma_datos:/data
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "cat < /dev/null > /dev/tcp/127.0.0.1/8000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Servidor del modelo de lenguaje. Sin GPU funciona en CPU, bastante más lento.
+  ollama:
+    image: ollama/ollama:0.35.1
+    volumes:
+      - ollama_modelos:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Descarga el modelo de lenguaje en Ollama y termina. Solo descarga si falta: `ollama pull`
+  # consulta internet aunque el modelo ya esté, y sin conexión impediría arrancar la aplicación.
+  # (`$$` es un `$` escapado para Compose: la variable la resuelve el shell del contenedor.)
+  modelo:
+    image: ollama/ollama:0.35.1
+    entrypoint: ["sh", "-c", "ollama show $$LLM_MODEL > /dev/null 2>&1 || ollama pull $$LLM_MODEL"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen3:4b-instruct}
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # Calcula los embeddings de data/clean/chunks.jsonl, los guarda en Chroma y termina. Es
+  # reanudable: en los arranques siguientes omite lo que ya está indexado.
+  indexador:
+    <<: *app
+    command: ["python", "-m", "src.ingestion.indexador"]
+    volumes:
+      - ./data/clean:/app/data/clean:ro
+      - hf_cache:/home/app/.cache/huggingface
+    depends_on:
+      chroma:
+        condition: service_healthy
+
+  # La interfaz de chat y la API. Arranca cuando la base está indexada y el modelo descargado.
+  app:
+    <<: *app
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - historial:/app/data/historial
+      - hf_cache:/home/app/.cache/huggingface
+    depends_on:
+      chroma:
+        condition: service_healthy
+      indexador:
+        condition: service_completed_successfully
+      modelo:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/salud', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+
+# Los datos viven en volúmenes con nombre y sobreviven a `docker compose down`
+# (para borrarlos: `docker compose down -v`).
+volumes:
+  chroma_datos:    # la base vectorial
+  ollama_modelos:  # el modelo de lenguaje descargado
+  hf_cache:        # el modelo de embeddings descargado
+  historial:       # las conversaciones (SQLite)
