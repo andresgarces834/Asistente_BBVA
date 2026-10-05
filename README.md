@@ -16,8 +16,8 @@ público de BBVA Colombia (<https://www.bbva.com.co/>) usando RAG. Prueba técni
 | 5. Recuperación y generación (LLM) | Hecho |
 | 6. Historial de conversación por ID | Hecho |
 | 7. Interfaz conversacional | Hecho |
-| 8. Análisis del historial (métricas) | Siguiente |
-| 9. Dockerización | Pendiente |
+| 8. Análisis del historial (métricas) | Hecho |
+| 9. Dockerización | Siguiente |
 
 ## Flujo de datos
 
@@ -42,6 +42,8 @@ sitemap.xml ---> [1. SCRAPER] ---> data/raw/*.html + manifest.jsonl
                                           ^
                                           |
                           [7. API web (FastAPI) + página de chat] <--- usuario
+
+data/historial/ ---> [8. ANÁLISIS: métricas del historial] ---> reporte en pantalla
 ```
 
 Las etapas están separadas a propósito: el scraper solo descarga y guarda HTML
@@ -76,11 +78,15 @@ Asistente_BBVA/
 │   │   └── retriever.py       # búsqueda de fragmentos                       (hecho)
 │   ├── memory/
 │   │   └── historial.py       # historial por sesión (Repository, SQLite)    (hecho)
-│   ├── analytics/             # métricas sobre el historial                  (pendiente)
+│   ├── analytics/
+│   │   └── metricas.py        # métricas del historial (cálculo y comando)   (hecho)
 │   └── ui/
 │       ├── api.py             # API web (FastAPI)                            (hecho)
 │       └── static/index.html  # página de chat                               (hecho)
-└── scripts/                   # validar si son necesarios                    (pendiente)
+├── scripts/                   # validar si son necesarios                    (pendiente)
+└── tests/
+    ├── test_metricas.py       # pruebas de las métricas del historial        (hecho)
+    └── test_chat.py           # pruebas del servicio de chat                 (hecho)
 ```
 
 ## Requisitos previos
@@ -236,6 +242,17 @@ Al arrancar carga los modelos, así que tarda en estar lista. Después abre
   defecto). Las conversaciones se guardan en `data/historial/historial.db`.
 
 La documentación interactiva de la API está en `/docs`.
+
+### 10. Analizar el historial
+
+```bash
+python -m src.analytics.metricas
+```
+
+Recorre todas las conversaciones guardadas y muestra el número de conversaciones, los
+mensajes por conversación, los turnos usuario-asistente, la longitud promedio de los
+mensajes y la duración de las conversaciones. Solo lee el historial y no necesita Ollama.
+Con `--db RUTA` analiza otro archivo SQLite; sin ella usa el de `HISTORIAL_PATH`.
 
 ## Etapa 1 — Scraping (implementada)
 
@@ -669,6 +686,44 @@ calienta, para que la primera pregunta no espere.
   pregunta sin relación con el sitio, la vista en móvil y en tema claro, y el mensaje de
   error cuando el servidor no está.
 
+## Etapa 8 — Análisis del historial (implementada)
+
+`src/analytics/metricas.py`. Entrada: el historial de conversaciones. Salida: un reporte en
+pantalla. Se ejecuta con `python -m src.analytics.metricas`.
+
+### Qué hace
+
+Recorre **todas** las conversaciones guardadas (`Historial.todos()`), las agrupa por ID de
+sesión y calcula cinco métricas:
+
+| Métrica | Cómo se calcula |
+|---|---|
+| Conversaciones | Cuántos IDs de sesión distintos hay |
+| Mensajes por conversación | Mensajes del usuario y del asistente de cada conversación: promedio, mínimo y máximo |
+| Turnos usuario-asistente | Una pregunta seguida de su respuesta es un turno: total, promedio por conversación y máximo |
+| Longitud promedio de los mensajes | En caracteres, por separado para el usuario y para el asistente |
+| Duración de la conversación | Tiempo entre su primer y su último mensaje: promedio y máxima |
+
+### Decisiones
+
+- **La longitud se calcula por rol.** Un solo promedio mezclaría preguntas cortas con
+  respuestas largas y no diría nada de ninguna de las dos.
+- **La pregunta se guarda con la hora en que llegó.** Antes, la pregunta y su respuesta
+  quedaban con la misma hora (la de terminar la respuesta), y una conversación de un solo
+  turno habría durado cero segundos. Las conversaciones guardadas antes de este cambio
+  conservan las horas antiguas: su duración no incluye lo que tardó la primera respuesta.
+- **El cálculo no sabe de SQLite.** `calcular` trabaja con mensajes; los recibe de
+  `Historial.todos()`, la parte del repositorio que recorre todas las conversaciones.
+- **Solo lee el historial** y no añade dependencias.
+
+### Cómo se comprobó
+
+Pruebas automáticas con datos inventados a mano, de modo que cada resultado esperado sale de
+una cuenta sencilla (`python -m unittest discover tests`); no necesitan Ollama ni el índice.
+Para ver que detectan errores se rompió el código a propósito en una copia (contar mal los
+turnos, mezclar los roles, perder el orden de los mensajes...) y alguna prueba falló en
+cada caso.
+
 ## Patrones de diseño
 
 | Patrón | Tipo | Dónde | Estado |
@@ -726,12 +781,10 @@ calienta, para que la primera pregunta no espere.
 
 ### Repository: historial (extra)
 
-No es uno de los tres patrones que se piden, pero encaja de forma natural y por eso se
-documenta.
-
 - **Qué es:** `Historial` (`src/memory/historial.py`) define cómo se guardan y se leen los
-  mensajes de una conversación (`agregar`, `ultimos`) sin decir dónde; `HistorialSQLite` es
-  la implementación local. `ServicioChat` solo conoce la interfaz.
+  mensajes de una conversación (`agregar`, `ultimos`) y recorre todas (`todos`, lo que usa
+  el análisis de la etapa 8) sin decir dónde; `HistorialSQLite` es la implementación local.
+  `ServicioChat` y el cálculo del análisis solo conocen la interfaz.
 - **Por qué aquí:** la persistencia es un detalle que puede cambiar (otra base, un
   servicio externo). Con un repositorio ese cambio no toca la lógica de la conversación,
   y las pruebas pueden usar una base temporal.
@@ -804,7 +857,9 @@ Lo implementado hasta ahora:
 - **Los embeddings se calculan en CPU.** Basta para una indexación que se hace una
   vez, pero la versión de PyTorch instalada no usa la GPU.
 - **La reescritura de las preguntas de seguimiento depende del modelo.** A veces añade
-  o pierde un detalle; por eso la interfaz muestra con qué pregunta se buscó.
+  o pierde un detalle; por eso la interfaz muestra con qué pregunta se buscó. Los
+  seguimientos muy cortos (*"¿Y el factoring?"*) a veces vuelven sin cambios y la búsqueda
+  falla aunque el sitio tenga la página.
 - **El modelo puede quedarse con un fragmento poco adecuado** cuando el correcto no
   queda entre los primeros resultados de la búsqueda.
 - **Las fuentes que se muestran son las recuperadas**, aunque la pregunta no tenga
@@ -821,7 +876,12 @@ Lo implementado hasta ahora:
   leer esa conversación. Basta para una demo local, no para exponerla en internet.
 - **Las conversaciones no se borran** ni tienen un tiempo de retención.
 - **Ollama debe estar en ejecución.** Sin GPU el modelo corre en CPU, bastante más lento.
-- **Sin pruebas automáticas.**
+- **Pruebas automáticas solo para el historial, las métricas y el chat.** El resto del
+  sistema se comprobó a mano.
+- **Las métricas del historial describen el uso, no el impacto ni la calidad.** El
+  enunciado pide "métricas y valores de impacto" y se entendió como el uso del asistente:
+  cuántas conversaciones hay, de qué tamaño y cuánto duran. No se estima el tiempo ahorrado
+  ni se mide si las respuestas fueron correctas.
 
 ## Futuras mejoras
 
