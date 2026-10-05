@@ -14,9 +14,9 @@ público de BBVA Colombia (<https://www.bbva.com.co/>) usando RAG. Prueba técni
 | 3. Chunking | Hecho |
 | 4. Vectorización e indexación | Hecho |
 | 5. Recuperación y generación (LLM) | Hecho |
-| 6. Interfaz conversacional | Siguiente |
-| 7. Historial de conversación por ID | Pendiente |
-| 8. Análisis del historial (métricas) | Pendiente |
+| 6. Historial de conversación por ID | Hecho |
+| 7. Interfaz conversacional | Hecho |
+| 8. Análisis del historial (métricas) | Siguiente |
 | 9. Dockerización | Pendiente |
 
 ## Flujo de datos
@@ -36,6 +36,12 @@ sitemap.xml ---> [1. SCRAPER] ---> data/raw/*.html + manifest.jsonl
                                           |
                                           v
                           [5. RAG: recuperación + LLM local] ---> respuesta + fuentes
+                                          ^
+                                          |
+                          [6. CHAT: historial por sesión + preguntas de seguimiento] ---> data/historial/
+                                          ^
+                                          |
+                          [7. API web (FastAPI) + página de chat] <--- usuario
 ```
 
 Las etapas están separadas a propósito: el scraper solo descarga y guarda HTML
@@ -48,8 +54,9 @@ Así se puede corregir o cambiar la limpieza sin volver a scrapear el sitio.
 Asistente_BBVA/
 ├── data/
 │   ├── raw/                   # HTML crudo + manifest.jsonl 
-│   ├── clean/                 # paginas, descartadas y chunks (.jsonl, sí se versiona)
-│   └── chroma/                # base vectorial local 
+│   ├── clean/                 # paginas, descartadas y chunks 
+│   ├── chroma/                # base vectorial local 
+│   └── historial/             # conversaciones en SQLite 
 ├── src/
 │   ├── config.py              # configuración desde .env                     (hecho)
 │   ├── scraping/
@@ -64,11 +71,15 @@ Asistente_BBVA/
 │   │   └── factory.py         # Factory de proveedores                       (hecho)
 │   ├── rag/
 │   │   ├── asistente.py       # fachada del RAG (Facade)                     (hecho)
+│   │   ├── chat.py            # servicio de conversación (historial + RAG)   (hecho)
 │   │   ├── prompt.py          # construcción del prompt                      (hecho)
 │   │   └── retriever.py       # búsqueda de fragmentos                       (hecho)
-│   ├── memory/                # historial de conversaciones                  (pendiente)
+│   ├── memory/
+│   │   └── historial.py       # historial por sesión (Repository, SQLite)    (hecho)
 │   ├── analytics/             # métricas sobre el historial                  (pendiente)
-│   └── ui/                    # interfaz conversacional                      (pendiente)
+│   └── ui/
+│       ├── api.py             # API web (FastAPI)                            (hecho)
+│       └── static/index.html  # página de chat                               (hecho)
 └── scripts/                   # validar si son necesarios                    (pendiente)
 ```
 
@@ -192,21 +203,39 @@ ollama pull qwen3:4b-instruct
 Para usar otro modelo, descárgalo del mismo modo, copia `.env.example` a `.env` y cambia
 la línea `LLM_MODEL`.
 
-### 8. Hacer una pregunta
+### 8. Hacer una pregunta por terminal
 
 ```bash
 python -m src.rag.asistente "¿Qué requisitos pide un crédito de vivienda?"
 ```
 
 Imprime la respuesta y las páginas del sitio que se usaron como fuente. Responde una
-pregunta por ejecución y no guarda historial, la interfaz conversacional es la siguiente
-etapa. Cada ejecución tarda unos segundos extra porque carga el modelo de embeddings. Si
+pregunta por ejecución y no guarda historial; para conversar usa la interfaz web.
+Cada ejecución vuelve a cargar el modelo de embeddings, lo que añade un rato de espera. Si
 Ollama no está en ejecución o el modelo no está descargado, muestra el error y cómo
 resolverlo.
 
-### 9. Cómo usar la interfaz conversacional
+### 9. Usar la interfaz de chat
 
-*Pendiente.*
+```bash
+python -m src.ui.api
+```
+
+Al arrancar carga los modelos, así que tarda en estar lista. Después abre
+<http://127.0.0.1:8000> en el navegador (la dirección y el puerto se cambian con
+`API_HOST` y `API_PORT`).
+
+- Escribe una pregunta o elige una de las sugerencias. Bajo cada respuesta, **Fuentes**
+  muestra las páginas del sitio que se usaron.
+- La conversación tiene un **ID**, que se ve arriba y el navegador recuerda. **Nueva**
+  empieza otra conversación y **Cargar ID** vuelve a una anterior; al recargar la página
+  también se recupera.
+- Las preguntas de seguimiento se entienden gracias al historial. Bajo cada respuesta 
+  se ve con qué pregunta se buscó.
+- Cuántos mensajes previos se tienen en cuenta se configura con `N_MENSAJES` (6 por
+  defecto). Las conversaciones se guardan en `data/historial/historial.db`.
+
+La documentación interactiva de la API está en `/docs`.
 
 ## Etapa 1 — Scraping (implementada)
 
@@ -538,6 +567,108 @@ pregunta *"¿Qué puedo hacer en mi línea empresarial?"* devolvía una lista in
 que llevó a corregir la reconstrucción de pestañas en la limpieza y el título repetido
 en el chunking (ver arriba).
 
+## Etapa 6 — Historial por ID y preguntas de seguimiento (implementada)
+
+`src/memory/historial.py`, `src/rag/chat.py` y el paso de reescritura de
+`src/rag/asistente.py`. Entrada: una pregunta con el ID de su conversación. Salida: la
+respuesta y el intercambio queda guardado.
+
+### Qué hace
+
+1. **Carga el contexto.** `ServicioChat` pide al historial los últimos `N_MENSAJES`
+   mensajes de esa conversación (6 por defecto). Cuenta mensajes, no turnos, y la
+   ventana siempre empieza en un mensaje del usuario, no a mitad de un intercambio.
+2. **Reescribe la pregunta.** Si hay historial, el asistente la convierte en una que se
+   entienda sola antes de buscar.
+3. **Responde** con la fachada, pasándole ese historial para armar el prompt.
+4. **Guarda** la pregunta y la respuesta. Si el modelo falla no se guarda nada, para que
+   la conversación no quede con una pregunta sin respuesta.
+
+### Por qué hace falta reescribir
+
+La búsqueda solo ve la pregunta, no el historial: *"¿Y la del portafolio plus?"* no dice
+de qué producto habla, y devolvía "no encontré" aunque la respuesta estuviera en el sitio.
+Ahora el modelo la reformula con ayuda de los mensajes previos y esa versión es la que se 
+usa para buscar. La pregunta original sigue siendo la que se contesta.
+
+- Cuesta una llamada corta extra al modelo, de menos de un segundo con el modelo por
+  defecto, y solo cuando hay historial.
+- Si el modelo devuelve algo inservible, se usa la pregunta original.
+- Se puede desactivar con `REESCRIBIR_PREGUNTAS=false`.
+- La reescritura se guarda y la interfaz la muestra ("Buscado como..."), para poder ver
+  cuándo el modelo interpretó mal.
+
+### Qué se guarda
+
+Una fila por mensaje en SQLite (`data/historial/historial.db`, ruta en `HISTORIAL_PATH`).
+En las respuestas se guardan, además del texto, los datos que servirán para el análisis
+del uso:
+
+| Campo | Contenido |
+|---|---|
+| `session_id`, `rol`, `contenido`, `creado_en` | La conversación, en orden |
+| `fuentes` | Páginas citadas (título, URL y puntaje) |
+| `modelo`, `latencia_ms` | Qué modelo respondió y cuánto tardó |
+| `sin_respuesta` | Si respondió que no encontró la información |
+| `pregunta_reescrita` | Con qué pregunta se buscó, si hubo reescritura |
+
+### Decisiones
+
+- **SQLite.** Viene con Python, no necesita un servidor y un solo archivo basta para este
+  volumen. Es la implementación local de `Historial`.
+- **El servicio atiende de una en una**, hay un solo modelo y una sola
+  GPU, y así cada intercambio se guarda completo y en orden.
+- **La fachada sigue sin guardar estado:** quien lleva el historial es `ServicioChat`.
+- **Esquema pensado para el análisis.** Guardar desde ya los campos de arriba permite
+  calcular después las métricas con consultas simples.
+
+### Resultado
+
+Tras preguntar por la cuota del portafolio básico de una cuenta, *"¿Y la del portafolio 
+plus?"* responde con el dato correcto. La conversación sobrevive a reiniciar el servidor, 
+y se probó con varias escrituras simultáneas sin perder filas.
+
+## Etapa 7 — Interfaz conversacional (implementada)
+
+`src/ui/api.py` (FastAPI) y `src/ui/static/index.html` (página de chat). Se arranca con
+`python -m src.ui.api`.
+
+### Qué hace
+
+Una página de chat que habla con una API. Al arrancar, el servidor carga los modelos y los
+calienta, para que la primera pregunta no espere.
+
+| Rutas | Para qué |
+|---|---|
+| `GET /` | La página de chat |
+| `POST /api/chat` | Recibe una pregunta (`session_id`, `pregunta`) y devuelve la respuesta con sus fuentes |
+| `GET /api/sesiones/{id}/mensajes` | Los mensajes de una conversación, para mostrarla de nuevo |
+| `GET /api/salud` | Si el modelo está disponible y cuántos fragmentos hay indexados |
+| `GET /docs` | Documentación interactiva de la API |
+
+### Decisiones
+
+- **FastAPI y una sola página HTML con JavaScript sin librerías.** Es lo más simple, no necesita
+  internet ni un paso de compilación, y se sirve igual dentro de Docker.
+- **Validación de entrada.** La pregunta debe tener entre 1 y 1000 caracteres y el ID solo
+  admite letras, números, guion y guion bajo; si no, la API responde 422.
+- **Errores que ayudan.** Si Ollama no responde o el modelo no está descargado, la API
+  responde 503 con las instrucciones para resolverlo, y la página las muestra. Cualquier
+  otro fallo devuelve un 500 genérico.
+- **Texto seguro.** La página escapa todo el texto antes de darle formato (listas y
+  negritas), así que lo que escriba el usuario o genere el modelo no puede inyectar HTML.
+- **Las fuentes van plegadas** bajo cada respuesta, y una respuesta de "no encontré" no
+  muestra fuentes.
+
+### Cómo se comprobó
+
+- Con un servicio simulado, la API: respuestas válidas, validaciones, errores 503 y 500,
+  historial y estado de salud.
+- En el navegador, con el servidor y los modelos reales: una conversación con pregunta de
+  seguimiento, recargar la página y recuperar la conversación, empezar una nueva, una
+  pregunta sin relación con el sitio, la vista en móvil y en tema claro, y el mensaje de
+  error cuando el servidor no está.
+
 ## Patrones de diseño
 
 | Patrón | Tipo | Dónde | Estado |
@@ -545,6 +676,7 @@ en el chunking (ver arriba).
 | **Strategy** | Comportamental | `src/ingestion/chunking.py` | Hecho |
 | **Factory** | Creacional | `src/providers/factory.py` | Hecho |
 | **Facade** | Estructural | `src/rag/asistente.py` | Hecho |
+| Repository | Acceso a datos | `src/memory/historial.py` | Hecho |
 
 ### Strategy: estrategias de chunking
 
@@ -561,12 +693,12 @@ en el chunking (ver arriba).
 ### Factory: proveedores
 
 - **Qué es:** `FabricaProveedores` es una clase abstracta que define *qué* se crea
-  (`crear_embeddings`, `crear_vector_store`, `crear_llm`). `FabricaLocal` define
-  *cómo*: `E5Embeddings`, `ChromaVectorStore` y `OllamaLLM`. `obtener_fabrica(config)`
-  elige la familia según `PERFIL`.
-- **Por qué aquí:** el indexador y el RAG solo trabajan contra las interfaces de
-  `providers/base.py`. Cambiar de proveedor es escribir otra fábrica y añadirla a
-  `FABRICAS`, sin tocar el código que la usa.
+  (`crear_embeddings`, `crear_vector_store`, `crear_llm`, `crear_historial`).
+  `FabricaLocal` define *cómo*: `E5Embeddings`, `ChromaVectorStore`, `OllamaLLM` y
+  `HistorialSQLite`. `obtener_fabrica(config)` elige la familia según `PERFIL`.
+- **Por qué aquí:** el indexador, el RAG y el servicio de chat solo trabajan contra
+  interfaces. Cambiar de proveedor es escribir otra fábrica y añadirla a `FABRICAS`, sin
+  tocar el código que la usa.
 - **Sobre el alcance:** hoy solo existe la familia `local`, así que la flexibilidad
   es potencial, no usada. Se eligió porque un cambio de modelo o de base
   vectorial es el cambio más probable en este sistema y la fábrica cuesta pocas
@@ -575,21 +707,36 @@ en el chunking (ver arriba).
 ### Facade: asistente RAG
 
 - **Qué es:** `AsistenteRAG` (`src/rag/asistente.py`) esconde el flujo RAG completo
-  tras un único método, `responder(pregunta, historial)`: recupera los fragmentos
-  (`Retriever`), arma el prompt (`construir_mensajes`), llama al LLM y devuelve una
-  `Respuesta` con el texto y las fuentes (una por página). `AsistenteRAG.desde_config()`
-  lo construye con los proveedores que entrega la fábrica.
-- **Por qué aquí:** responder una pregunta encadena tres piezas distintas (búsqueda
-  vectorial, prompt y LLM). Quien use el asistente (el CLI `python -m src.rag.asistente`
-  y, más adelante, la interfaz de chat) solo necesita `responder`. Así, cambiar algo
-  dentro del flujo (otro modelo, un reranker, reescribir la pregunta con el historial)
-  no obliga a tocar a quien lo llama.
+  tras un único método, `responder(pregunta, historial)`: reescribe la pregunta si hay
+  historial, recupera los fragmentos (`Retriever`), arma el prompt (`construir_mensajes`),
+  llama al LLM y devuelve una `Respuesta` con el texto y las fuentes (una por página).
+  `AsistenteRAG.desde_config()` lo construye con los proveedores que entrega la fábrica.
+- **Por qué aquí:** responder una pregunta encadena varias piezas distintas (reescritura,
+  búsqueda vectorial, prompt y LLM). Quien use el asistente (el CLI
+  `python -m src.rag.asistente` y `ServicioChat`, que alimenta la interfaz web) solo
+  necesita `responder`. Así, cambiar algo dentro del flujo (otro modelo, un reranker) no
+  obliga a tocar a quien lo llama: la reescritura de preguntas se añadió dentro de la
+  fachada y el CLI siguió funcionando sin cambios.
 - **Alternativa descartada:** que cada interfaz encadene retriever, prompt y LLM por
   su cuenta. Funcionaría, pero cada una repetiría esos pasos y cualquier cambio del
   flujo habría que replicarlo en todas.
 - **Sobre el alcance:** la fachada no guarda el historial: lo recibe como parámetro
   (`historial`, una lista de mensajes `{"role", "content"}`). Guardarlo por
-  `session_id` es una etapa aparte, todavía pendiente.
+  `session_id` es trabajo de `ServicioChat` (etapa 6).
+
+### Repository: historial (extra)
+
+No es uno de los tres patrones que se piden, pero encaja de forma natural y por eso se
+documenta.
+
+- **Qué es:** `Historial` (`src/memory/historial.py`) define cómo se guardan y se leen los
+  mensajes de una conversación (`agregar`, `ultimos`) sin decir dónde; `HistorialSQLite` es
+  la implementación local. `ServicioChat` solo conoce la interfaz.
+- **Por qué aquí:** la persistencia es un detalle que puede cambiar (otra base, un
+  servicio externo). Con un repositorio ese cambio no toca la lógica de la conversación,
+  y las pruebas pueden usar una base temporal.
+- **Sobre el alcance:** hoy solo existe la implementación SQLite, que crea la misma
+  fábrica de proveedores (`crear_historial`).
 
 El scraper y la limpieza **no aplican ningún patrón de forma deliberada**: tienen
 una sola fuente y un solo comportamiento, así que no hay nada que elegir ni
@@ -609,8 +756,9 @@ Lo implementado hasta ahora:
 | Chroma | Base vectorial | Código abierto, embebida o como servidor con el mismo código, filtrado por metadatos |
 | `python-dotenv` | Configuración | Parámetros externalizados en `.env` sin tocar el código |
 | Ollama + `qwen3:4b-instruct` (cliente `ollama`) | LLM | Modelo de código abierto que corre en local, sin costo ni API externa. El hardware de desarrollo es una GTX 1060 de 6 GB, que limita a modelos pequeños. Se usa la variante *instruct*, mucho más rápida que la que razona |
-
-La interfaz está pendiente de definir.
+| `sqlite3` (stdlib) | Historial de conversaciones | Viene con Python, no necesita servidor y un solo archivo basta |
+| FastAPI + uvicorn | API web | Validación de entrada y documentación automática con poco código |
+| HTML + JavaScript sin librerías | Página de chat | Una sola página que no necesita internet ni compilación y se sirve igual dentro de Docker |
 
 ## Limitaciones conocidas y decisiones de diseño
 
@@ -655,17 +803,23 @@ La interfaz está pendiente de definir.
   (`chromadb==1.5.9`); habrá que fijar la imagen del servidor.
 - **Los embeddings se calculan en CPU.** Basta para una indexación que se hace una
   vez, pero la versión de PyTorch instalada no usa la GPU.
-- **Las preguntas de seguimiento no usan el historial al buscar.** El historial llega
-  al modelo, pero la búsqueda se hace con la pregunta suelta: algo como "¿y la del plan
-  plus?" no sabe de qué producto se habla.
+- **La reescritura de las preguntas de seguimiento depende del modelo.** A veces añade
+  o pierde un detalle; por eso la interfaz muestra con qué pregunta se buscó.
 - **El modelo puede quedarse con un fragmento poco adecuado** cuando el correcto no
   queda entre los primeros resultados de la búsqueda.
 - **Las fuentes que se muestran son las recuperadas**, aunque la pregunta no tenga
   relación con el sitio (por ejemplo, un saludo).
 - **Una respuesta que abarca varios chunks depende de que todos entren** entre los
   fragmentos recuperados; una lista muy larga podría llegar incompleta.
-- **La interfaz actual responde una pregunta por ejecución** y vuelve a cargar el
-  modelo de embeddings cada vez.
+- **El terminal responde una pregunta por ejecución** y vuelve a cargar el modelo de
+  embeddings cada vez; para conversar se usa la interfaz web.
+- **La respuesta aparece completa al terminar**, sin mostrarse mientras se genera; las
+  largas tardan varios segundos.
+- **Las peticiones se atienden de una en una.** Con varios usuarios a la vez, cada uno
+  espera su turno (hay un solo modelo y una sola GPU).
+- **Sin autenticación.** El ID de conversación es el único control: quien lo conozca puede
+  leer esa conversación. Basta para una demo local, no para exponerla en internet.
+- **Las conversaciones no se borran** ni tienen un tiempo de retención.
 - **Ollama debe estar en ejecución.** Sin GPU el modelo corre en CPU, bastante más lento.
 - **Sin pruebas automáticas.**
 
@@ -681,7 +835,8 @@ La interfaz está pendiente de definir.
 - Medir el tamaño de los chunks en tokens con el tokenizador del modelo de embeddings.
 - Reranker sobre los resultados recuperados (también ayudaría a detectar preguntas
   sin respuesta en el sitio).
-- Reescribir las preguntas de seguimiento con el historial antes de buscar.
+- Mostrar la respuesta mientras se genera - *streaming*.
+- Poder borrar conversaciones, fijar un tiempo de retención y listar las anteriores.
 - Traer, junto a cada resultado, los chunks vecinos de su misma página, para que una
   lista o un procedimiento partido no llegue incompleto.
 - Evaluación formal de la recuperación y de los modelos con un conjunto de preguntas y
