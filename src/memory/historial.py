@@ -12,6 +12,7 @@ información y cómo se reescribió la pregunta.
 import json
 import sqlite3
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,6 +47,13 @@ class Historial(ABC):
     @abstractmethod
     def ultimos(self, session_id: str, n: int) -> list[Mensaje]:
         """Los últimos `n` mensajes de la conversación, del más antiguo al más reciente"""
+
+    @abstractmethod
+    def todos(self) -> Iterator[tuple[str, Mensaje]]:
+        """Recorre los mensajes de todas las conversaciones, en el orden en que se guardaron.
+
+        Devuelve pares (session_id, mensaje). Es lo que usa el análisis del historial.
+        """
 
 ########################################################################
 ###############  ESQUEMA DE LA BASE DE DATOS HISTORIAL  ################
@@ -122,6 +130,12 @@ class HistorialSQLite(Historial):
             ).fetchall()
 
         return [self._a_mensaje(fila) for fila in reversed(filas)]
+
+    def todos(self) -> Iterator[tuple[str, Mensaje]]:
+        # Se recorre fila a fila, sin cargar todo en memoria, y la conexión se cierra al terminar.
+        with closing(self._conectar()) as con:
+            for fila in con.execute("SELECT * FROM mensajes ORDER BY id"):
+                yield fila["session_id"], self._a_mensaje(fila)
 
     @staticmethod
     def _a_mensaje(fila: sqlite3.Row) -> Mensaje:

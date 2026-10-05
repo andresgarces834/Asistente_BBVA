@@ -8,6 +8,7 @@ quien lleva el historial es este servicio.
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from src.config import Config, obtener_config
 from src.memory.historial import Historial, Mensaje
@@ -50,6 +51,10 @@ class ServicioChat:
     def responder(self, session_id: str, pregunta: str) -> Mensaje:
         """Responde dentro de la conversación `session_id` y devuelve el mensaje del asistente"""
 
+        # La pregunta se guarda con la hora en que llegó, no con la de terminar la respuesta:
+        # así la duración de una conversación incluye lo que tardó en contestarse.
+        recibida = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
         with self._candado:
             previos = self._contexto(session_id)
 
@@ -71,7 +76,9 @@ class ServicioChat:
             )
 
             # Se guarda solo si todo salió bien: si el modelo falla, la conversacion no queda con una pregunta sin respuesta.
-            self._historial.agregar(session_id, [Mensaje(rol="user", contenido=pregunta), respuesta])
+            self._historial.agregar(
+                session_id, [Mensaje(rol="user", contenido=pregunta, creado_en=recibida), respuesta]
+            )
             return respuesta
 
     def mensajes(self, session_id: str, limite: int = 100) -> list[Mensaje]:
