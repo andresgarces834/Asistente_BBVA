@@ -17,76 +17,45 @@ público de BBVA Colombia (<https://www.bbva.com.co/>) usando RAG. Prueba técni
 | 8. Análisis del historial (métricas) | Hecho |
 | 9. Dockerización | Hecho |
 
-## Flujo de datos
-
-```
-sitemap.xml ---> [1. SCRAPER] ---> data/raw/*.html + manifest.jsonl
-                                          |
-                                          v
-                                   [2. LIMPIEZA] ---> data/clean/paginas.jsonl
-                                                      data/clean/descartadas.jsonl
-                                          |
-                                          v
-                                   [3. CHUNKING] ---> data/clean/chunks.jsonl
-                                          |
-                                          v
-                          [4. EMBEDDINGS + BASE VECTORIAL] ---> data/chroma/
-                                          |
-                                          v
-                          [5. RAG: recuperación + LLM local] ---> respuesta + fuentes
-                                          ^
-                                          |
-                          [6. CHAT: historial por sesión + preguntas de seguimiento] ---> data/historial/
-                                          ^
-                                          |
-                          [7. API web (FastAPI) + página de chat] <--- usuario
-
-data/historial/ ---> [8. ANÁLISIS: métricas del historial] ---> reporte en pantalla
-```
-
-Las etapas están separadas a propósito: el scraper solo descarga y guarda HTML
-sin transformarlo. Toda la limpieza ocurre después, a partir de los datos crudos.
-Así se puede corregir o cambiar la limpieza sin volver a scrapear el sitio.
-
 ## Estructura del repositorio - pensada inicialmente
 
 ```
 Asistente_BBVA/
-├── Dockerfile                 # imagen de la aplicación                      (hecho)
-├── docker-compose.yml         # todos los servicios con un solo comando      (hecho)
-├── docker-compose.gpu.yml     # añade la GPU NVIDIA al servicio de Ollama    (hecho)
+├── Dockerfile                 # imagen de la aplicación                    
+├── docker-compose.yml         # todos los servicios con un solo comando     
+├── docker-compose.gpu.yml     # añade la GPU NVIDIA al servicio de Ollama  
 ├── data/
 │   ├── raw/                   # HTML crudo + manifest.jsonl 
 │   ├── clean/                 # paginas, descartadas y chunks 
 │   ├── chroma/                # base vectorial local 
 │   └── historial/             # conversaciones en SQLite 
 ├── src/
-│   ├── config.py              # configuración desde .env                     (hecho)
+│   ├── config.py              # configuración desde .env                    
 │   ├── scraping/
-│   │   └── scraper.py         # descarga paralela del HTML crudo             (hecho)
+│   │   └── scraper.py         # descarga paralela del HTML crudo            
 │   ├── ingestion/
-│   │   ├── limpieza.py        # HTML crudo -> texto limpio                   (hecho)
-│   │   ├── chunking.py        # páginas -> chunks (Strategy)                 (hecho)
-│   │   └── indexador.py       # chunks -> embeddings -> Chroma               (hecho)
+│   │   ├── limpieza.py        # HTML crudo -> texto limpio                   
+│   │   ├── chunking.py        # páginas -> chunks (Strategy)                 
+│   │   └── indexador.py       # chunks -> embeddings -> Chroma               
 │   ├── providers/
-│   │   ├── base.py            # interfaces Embeddings / VectorStore / LLM    (hecho)
-│   │   ├── local.py           # e5 + Chroma + Ollama                         (hecho)
-│   │   └── factory.py         # Factory de proveedores                       (hecho)
+│   │   ├── base.py            # interfaces Embeddings / VectorStore / LLM    
+│   │   ├── local.py           # e5 + Chroma + Ollama                         
+│   │   └── factory.py         # Factory de proveedores                       
 │   ├── rag/
-│   │   ├── asistente.py       # fachada del RAG (Facade)                     (hecho)
-│   │   ├── chat.py            # servicio de conversación (historial + RAG)   (hecho)
-│   │   ├── prompt.py          # construcción del prompt                      (hecho)
-│   │   └── retriever.py       # búsqueda de fragmentos                       (hecho)
+│   │   ├── asistente.py       # fachada del RAG (Facade)                     
+│   │   ├── chat.py            # servicio de conversación (historial + RAG)   
+│   │   ├── prompt.py          # construcción del prompt                      
+│   │   └── retriever.py       # búsqueda de fragmentos                       
 │   ├── memory/
-│   │   └── historial.py       # historial por sesión (Repository, SQLite)    (hecho)
+│   │   └── historial.py       # historial por sesión (Repository, SQLite)    
 │   ├── analytics/
-│   │   └── metricas.py        # métricas del historial (cálculo y comando)   (hecho)
+│   │   └── metricas.py        # métricas del historial (cálculo y comando)   
 │   └── ui/
-│       ├── api.py             # API web (FastAPI)                            (hecho)
-│       └── static/index.html  # página de chat                               (hecho)
+│       ├── api.py             # API web (FastAPI)                            
+│       └── static/index.html  # página de chat                              
 └── tests/
-    ├── test_metricas.py       # pruebas de las métricas del historial        (hecho)
-    └── test_chat.py           # pruebas del servicio de chat                 (hecho)
+    ├── test_metricas.py       # pruebas de las métricas del historial        
+    └── test_chat.py           # pruebas del servicio de chat                
 ```
 
 ## Requisitos previos
